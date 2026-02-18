@@ -1,0 +1,25 @@
+{
+  "name": "scc200-transport",
+  "dockerComposeFile": "docker-compose.yml",
+  "service": "app",
+  "workspaceFolder": "/workspace",
+  "forwardPorts": [8000, 5432],
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-python.isort",
+        "ms-python.autopep8",
+        "eamodio.gitlens",
+        "mhutchie.git-graph",
+        "gruntfuggly.todo-tree",
+        "mohsen1.prettify-json"
+      ],
+      "settings": {
+        "files.eol": "\n",
+        "files.autoSave": "onFocusChange",
+        "editor.formatOnSave": true
+      }
+    }
+  }
+}
