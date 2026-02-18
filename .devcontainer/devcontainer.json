@@ -4,6 +4,7 @@
   "workspaceMount": "source=${localWorkspaceFolder}/,target=/workspace,type=bind,consistency=cached",
   "workspaceFolder": "/workspace",
   "updateRemoteUserUID": false,
+  "remoteUser": "root",
   "postCreateCommand": "pip install fastapi uvicorn[standard] asyncpg sqlalchemy[asyncio] pydantic-settings stomp.py httpx python-dotenv",
   "forwardPorts": [8000],
   "customizations": {
