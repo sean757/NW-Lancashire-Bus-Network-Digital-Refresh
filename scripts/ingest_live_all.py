@@ -24,21 +24,7 @@ OPERATORS = ["ARCT", "BLAC", "KLCO", "SCCU", "SCMY", "NUTT"]
 NS = {'siri': 'http://www.siri.org.uk/siri'}
 
 
-def setup_database(conn):
-    """Create the live_positions table """
-    with conn.cursor() as cur:
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS live_positions (
-                vehicle_id VARCHAR(50) PRIMARY KEY,
-                operator_code VARCHAR(10),
-                latitude NUMERIC,
-                longitude NUMERIC,
-                bearing NUMERIC,
-                timestamp TIMESTAMP
-            );
-        """)
-        conn.commit()
-        print(" Database table 'live_positions' is ready.")
+# Removed setup_database() - schema is managed by init_db.sql
 
 
 def fetch_and_store_live_data(conn):
@@ -66,14 +52,8 @@ def fetch_and_store_live_data(conn):
                     './/siri:VehicleActivity', namespaces=NS)
 
                 insert_query = """
-                    INSERT INTO live_positions (vehicle_id, operator_code, latitude, longitude, bearing, timestamp)
-                    VALUES (%s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (vehicle_id) 
-                    DO UPDATE SET 
-                        latitude = EXCLUDED.latitude,
-                        longitude = EXCLUDED.longitude,
-                        bearing = EXCLUDED.bearing,
-                        timestamp = EXCLUDED.timestamp;
+                    INSERT INTO live_positions (vehicle_id, latitude, longitude, bearing, source, recorded_at)
+                    VALUES (%s, %s, %s, %s, %s, %s);
                 """
 
                 count = 0
@@ -95,7 +75,7 @@ def fetch_and_store_live_data(conn):
 
                         if vehicle_id and lat and lon:
                             cur.execute(
-                                insert_query, (vehicle_id, operator or noc, lat, lon, bearing, datetime.now()))
+                                insert_query, (vehicle_id, lat, lon, bearing, 'api', datetime.now()))
                             count += 1
                             total_updated += 1
 
@@ -112,7 +92,7 @@ def fetch_and_store_live_data(conn):
 if __name__ == "__main__":
     try:
         conn = psycopg2.connect(**DB_CONFIG)
-        setup_database(conn)
+        # Removed setup_database(conn) - run init_db.sql first
         print("Starting Live SIRI XML Tracking (10s interval) [cite: 138]\n")
 
         while True:

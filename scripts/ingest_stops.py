@@ -15,21 +15,7 @@ DB_CONFIG = {
 URL = "https://transport.scc.lancs.ac.uk/nptg/naptan.xml"
 
 
-def create_table(conn):
-    """Create the Stops table based on the Design Report requirements."""
-    with conn.cursor() as cur:
-        # Create Stops table containing atco_code, name, coordinates, and locality
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS stops (
-                atco_code VARCHAR(20) PRIMARY KEY,
-                stop_name VARCHAR(255),
-                locality VARCHAR(50),
-                latitude NUMERIC,
-                longitude NUMERIC
-            );
-        """)
-        conn.commit()
-        print(" Database table 'stops' checked/created successfully.")
+# Removed create_table() - schema is managed by init_db.sql
 
 
 def ingest_data(conn):
@@ -51,9 +37,9 @@ def ingest_data(conn):
         'end',), tag='{http://www.naptan.org.uk/}StopPoint')
 
     insert_query = """
-        INSERT INTO stops (atco_code, stop_name, locality, latitude, longitude)
+        INSERT INTO stops (stop_id, stop_name, locality, latitude, longitude)
         VALUES (%s, %s, %s, %s, %s)
-        ON CONFLICT (atco_code) DO NOTHING;
+        ON CONFLICT (stop_id) DO NOTHING;
     """
 
     count = 0
@@ -89,7 +75,7 @@ def ingest_data(conn):
 if __name__ == "__main__":
     try:
         conn = psycopg2.connect(**DB_CONFIG)
-        create_table(conn)
+        # Removed create_table(conn) - run init_db.sql first
         ingest_data(conn)
         conn.close()
     except Exception as e:
