@@ -10,7 +10,7 @@ from datetime import datetime
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 DB_CONFIG = {
-    "host": "172.17.0.1",
+    "host": "localhost",
     "port": "5432",
     "user": "transport",
     "password": "transport_dev",

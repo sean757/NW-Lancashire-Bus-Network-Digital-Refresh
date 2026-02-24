@@ -4,7 +4,7 @@ import psycopg2
 
 # 1. Database configuration (using the IP you successfully tested earlier)
 DB_CONFIG = {
-    "host": "172.17.0.1",
+    "host": "localhost",
     "port": 5432,
     "user": "transport",
     "password": "transport_dev",

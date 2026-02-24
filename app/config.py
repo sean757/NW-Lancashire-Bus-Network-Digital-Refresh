@@ -3,7 +3,7 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     # Database
-    db_host: str = "host.containers.internal"
+    db_host: str = "localhost"
     db_port: int = 5432
     db_user: str = "transport"
     db_password: str = "transport_dev"
