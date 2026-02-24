@@ -8,7 +8,7 @@
   "runArgs": [
     "--network=host"
   ],
-  "postCreateCommand": "apt-get update && apt-get install -y postgresql-client && pip install fastapi uvicorn[standard] asyncpg sqlalchemy[asyncio] pydantic-settings stomp.py httpx python-dotenv lxml psycopg2-binary requests"
+  "postCreateCommand": "apt-get update && apt-get install -y postgresql-client && pip install fastapi uvicorn[standard] asyncpg sqlalchemy[asyncio] pydantic-settings stomp.py httpx python-dotenv lxml psycopg2-binary requests",
   "forwardPorts": [
     8000
   ],
