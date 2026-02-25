@@ -17,7 +17,7 @@ cd NW-Lancashire-Bus-Network-Digital-Refresh
 
 ### 2. Start the PostgreSQL database
 
-Run this on the **host machine** outside of the devcontainer:
+Run this on the **host machine** (outside of the devcontainer):
 
 **If using Podman (lab machines):**
 
@@ -30,7 +30,7 @@ podman run -d --name scc200-db \
   docker.io/library/postgres:16
 ```
 
-**If using Docker:**
+**If using Docker (personal machines):**
 
 ```bash
 docker run -d --name scc200-db \
@@ -48,19 +48,81 @@ docker run -d --name scc200-db \
 3. Type `Dev Containers: Reopen in Container` and select it
 4. Wait for the container to build (first time takes a few minutes)
 
-Once inside the container, you'll have Python 3.12 and all project dependencies installed automatically.
+All Python dependencies are installed automatically.
 
-### 4. Verify everything works
+### 4. Initialise the database schema
 
-Open a terminal inside the devcontainer and run:
+Inside the devcontainer terminal:
 
 ```bash
-python -c 'import psycopg2; conn = psycopg2.connect(host="host.containers.internal", port=5432, user="transport", password="transport_dev", dbname="transport_db"); print("Connected"); conn.close()'
+PGPASSWORD=transport_dev psql -h localhost -U transport -d transport_db -f scripts/init_db.sql
 ```
 
-If you see `Connected`, it's all set up
+**Important:** This must be run before any ingest scripts. The schema is managed centrally in `init_db.sql` — ingest scripts do not create their own tables.
 
-> **Troubleshooting:** If `host.containers.internal` doesn't work, try `172.17.0.1` or `host.docker.internal` instead.
+### 5. Load the stop data
+
+```bash
+python -u scripts/ingest_stops.py
+```
+
+This downloads NaPTAN data and imports ~8,500 bus stops. Takes about 30 seconds.
+
+### 6. Start the API server
+
+```bash
+uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload
+```
+
+API docs available at: http://localhost:8080/docs
+
+### 7. Verify everything works
+
+With the server running, open a second terminal and test:
+
+```bash
+curl http://localhost:8080/health
+curl http://localhost:8080/api/v1/stops/search?q=lancaster
+```
+
+## API Endpoints
+
+### Core
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/health` | Health check |
+| GET | `/api/v1/weather?lat=54.05&lon=-2.80` | Weather proxy (CORS workaround) |
+
+### Stops
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/v1/stops/` | List stops (filter by locality, stop_type) |
+| GET | `/api/v1/stops/search?q=lancaster` | Full-text search for stops |
+| GET | `/api/v1/stops/nearby?lat=54.05&lon=-2.80` | Find stops within radius |
+| GET | `/api/v1/stops/{stop_id}` | Get single stop by ATCOCode |
+| GET | `/api/v1/stops/{stop_id}/routes` | Routes serving a stop |
+
+### Disruptions
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/v1/disruptions/` | List disruptions (filter by route, severity, type) |
+| GET | `/api/v1/disruptions/active` | Active disruptions sorted by severity |
+| GET | `/api/v1/disruptions/{id}` | Single disruption |
+| GET | `/api/v1/disruptions/live/buses` | Proxy live SIRI bus feed |
+| GET | `/api/v1/disruptions/live/positions` | Latest positions from DB |
+
+## Ingestion Scripts
+
+Run these inside the devcontainer **after** running `init_db.sql`:
+
+| Script | Description |
+|--------|-------------|
+| `python -u scripts/ingest_stops.py` | Import NaPTAN bus stops (~8,500 stops) |
+| `python -u scripts/ingest_live_all.py` | Poll live bus positions (runs continuously, Ctrl+C to stop) |
+| `python -u scripts/ingest_timetables.py` | Import timetable data (work in progress) |
 
 ## Daily Workflow
 
@@ -71,6 +133,7 @@ If you see `Connected`, it's all set up
    - Docker: `docker start scc200-db`
 2. Open the project folder in VS Code
 3. Reopen in Container (VS Code should prompt automatically)
+4. Start the API server: `uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload`
 
 ### Stopping work
 
@@ -84,30 +147,18 @@ If you see `Connected`, it's all set up
 If you need a fresh database:
 
 ```bash
-# Podman
+# On the host machine
 podman stop scc200-db && podman rm scc200-db
-
-# Then re-run the podman run command
+# Re-run the podman run command from Step 2
+# Then inside the devcontainer, re-run Steps 4 and 5
 ```
 
-## Running the API server
+## Database Connection Details
 
-Inside the devcontainer:
-
-```bash
-cd /workspace
-uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
-```
-
-API docs available at: http://localhost:8000/docs
-
-
-### Database Connection Details
-
-| Setting  | Value                      |
-|----------|----------------------------|
-| Host     | host.containers.internal   |
-| Port     | 5432                       |
-| User     | transport                  |
-| Password | transport_dev              |
-| Database | transport_db               |
+| Setting  | Value     |
+|----------|-----------|
+| Host     | localhost |
+| Port     | 5432      |
+| User     | transport |
+| Password | transport_dev |
+| Database | transport_db |
