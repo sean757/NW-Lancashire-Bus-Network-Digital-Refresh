@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lancashire Journey Planner</title>
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="lib/leaflet/leaflet.css"/>
+    
+    <!-- Custom CSS -->
+    <link rel="stylesheet" href="styles.css">
+
+</head>
+<body>
+  
+    <!-- Sidebar Navigation -->
+    <nav class="sidebar" id="sidebar">
+        <div class="sidebar-header">
+            <h2>Menu</h2>
+            <button class="close-btn" id="closeSidebar" aria-label="Close navigation menu">&times;</button>
+        </div>
+        <ul class="sidebar-menu">
+            <li><a href="#" class="active">Home</a></li>
+            <li><a href="#" id="accessibilityLink">Accessibility Settings</a></li>
+            <li><a href="#" id="reportBugLink">Report Bug</a></li>
+        </ul>
+    </nav>
+
+    <!-- Main Content -->
+    <div class="main-content">
+        <!-- Header -->
+        <header class="header">
+            <button class="menu-btn" id="menuBtn" aria-label="Open navigation menu">&#9776;</button>
+            <h1>Lancashire Journey Planner</h1>
+            <img src="world.png" class="logo" alt="logo">
+        </header>
+
+        <!-- Route Planning Section -->
+        <section class="route-planner">
+            <button class="planner-toggle" id="plannerToggle" aria-label="Toggle route planner" aria-expanded="true">
+                <span class="toggle-text">Route Planner</span>
+                <span class="toggle-icon">▼</span>
+            </button>
+            
+            <div class="planner-content" id="plannerContent">
+                <div class="planner-row">
+                    <div class="input-group">
+                        <label for="startPoint">Start Point:</label>
+                        <input type="text" id="startPoint" placeholder="Enter starting location">
+                    </div>
+                    <div class="input-group">
+                        <label for="endPoint">End Point:</label>
+                        <input type="text" id="endPoint" placeholder="Enter destination">
+                    </div>
+                </div>
+                
+                <div class="planner-row">
+                    <div class="input-group">
+                        <label for="pathfinding">Pathfinding Preference:</label>
+                        <select id="pathfinding">
+                            <option value="fastest">Fastest Time</option>
+                            <option value="least-changes">Least Number of Changes</option>
+                        </select>
+                    </div>
+                    
+                    <div class="input-group">
+                        <label for="walkingSpeed">Walking Speed:</label>
+                        <select id="walkingSpeed">
+                            <option value="slow">Slow</option>
+                            <option value="medium" selected>Medium</option>
+                            <option value="fast">Fast</option>
+                        </select>
+                    </div>
+                    
+                    <button class="plan-route-btn" id="planRouteBtn">Plan Route</button>
+                </div>
+            </div>
+        </section>
+
+        <!-- Map and Route Display -->
+        <div class="map-container">
+            <div id="map"></div>
+            
+            <!-- Route Display Panel -->
+            <div class="route-display" id="routeDisplay">
+                <h3>Route Information</h3>
+                <div class="route-content" id="routeContent">
+                    <p>Enter your start and end points to plan your journey.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Accessibility Settings Modal -->
+    <div class="modal" id="accessibilityModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Accessibility Settings</h2>
+                <button class="close-btn" id="closeModal" aria-label="Close accessibility settings">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="setting-group">
+                    <label for="fontSize">Font Size:</label>
+                    <select id="fontSize">
+                        <option value="small">Small</option>
+                        <option value="medium" selected>Medium</option>
+                        <option value="large">Large</option>
+                        <option value="extra-large">Extra Large</option>
+                    </select>
+                </div>
+                
+                <div class="setting-group">
+                    <label for="highContrast">High Contrast Mode:</label>
+                    <input type="checkbox" id="highContrast">
+                </div>
+                
+               
+        
+                <button class="save-settings-btn" id="saveSettings">Save Settings</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bug Report Modal -->
+    <div class="modal" id="bugReportModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Report a Bug</h2>
+                <button class="close-btn" id="closeBugModal" aria-label="Close bug report">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="setting-group">
+                    <label for="bugType">Bug Type:</label>
+                    <select id="bugType">
+                        <option value="ui">UI Bug</option>
+                        <option value="functional">Functional Bug</option>
+                    </select>
+                </div>
+                
+                <div class="setting-group">
+                    <label for="bugDescription">Bug Description:</label>
+                    <textarea id="bugDescription" placeholder="Please describe the bug you encountered..." rows="6"></textarea>
+                </div>
+                
+                <button class="save-settings-btn" id="reportBugBtn">Report</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Weather Widget -->
+    <div class="weather-widget" id="weatherWidget">
+        <div class="weather-loading">Loading weather...</div>
+    </div>
+    
+  
+    
+    <!-- Notification Toast -->
+    <div class="notification-toast" id="notificationToast" role="status" aria-live="polite"></div>
+    
+    <!-- Leaflet JS -->
+    <script src="lib/leaflet/leaflet.js"></script>
+    
+    <!-- Weather API -->
+    <script src="weather.js"></script>
+    
+    <!-- Custom JS -->
+    <script src="app.js"></script>
+   
+</body>
+</html>
