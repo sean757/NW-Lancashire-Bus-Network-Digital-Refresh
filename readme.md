@@ -122,7 +122,7 @@ Run these inside the devcontainer **after** running `init_db.sql`:
 |--------|-------------|
 | `python -u scripts/ingest_stops.py` | Import NaPTAN bus stops (~8,500 stops) |
 | `python -u scripts/ingest_live_all.py` | Poll live bus positions (runs continuously, Ctrl+C to stop) |
-| `python -u scripts/ingest_timetables.py` | Import timetable data (work in progress) |
+| `python -u scripts/ingest_timetables.py` | Import timetable data |
 
 ## Daily Workflow
 
