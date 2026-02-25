@@ -1,18 +1,20 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Lancashire Journey Planner</title>
     <!-- Leaflet CSS -->
-    <link rel="stylesheet" href="lib/leaflet/leaflet.css"/>
-    
+    <link rel="stylesheet" href="lib/leaflet/leaflet.css" />
+
     <!-- Custom CSS -->
-    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="ClientPack/source/style/styles.css">
 
 </head>
+
 <body>
-  
+
     <!-- Sidebar Navigation -->
     <nav class="sidebar" id="sidebar">
         <div class="sidebar-header">
@@ -41,7 +43,7 @@
                 <span class="toggle-text">Route Planner</span>
                 <span class="toggle-icon">▼</span>
             </button>
-            
+
             <div class="planner-content" id="plannerContent">
                 <div class="planner-row">
                     <div class="input-group">
@@ -53,7 +55,7 @@
                         <input type="text" id="endPoint" placeholder="Enter destination">
                     </div>
                 </div>
-                
+
                 <div class="planner-row">
                     <div class="input-group">
                         <label for="pathfinding">Pathfinding Preference:</label>
@@ -62,7 +64,7 @@
                             <option value="least-changes">Least Number of Changes</option>
                         </select>
                     </div>
-                    
+
                     <div class="input-group">
                         <label for="walkingSpeed">Walking Speed:</label>
                         <select id="walkingSpeed">
@@ -71,7 +73,7 @@
                             <option value="fast">Fast</option>
                         </select>
                     </div>
-                    
+
                     <button class="plan-route-btn" id="planRouteBtn">Plan Route</button>
                 </div>
             </div>
@@ -80,7 +82,7 @@
         <!-- Map and Route Display -->
         <div class="map-container">
             <div id="map"></div>
-            
+
             <!-- Route Display Panel -->
             <div class="route-display" id="routeDisplay">
                 <h3>Route Information</h3>
@@ -108,14 +110,14 @@
                         <option value="extra-large">Extra Large</option>
                     </select>
                 </div>
-                
+
                 <div class="setting-group">
                     <label for="highContrast">High Contrast Mode:</label>
                     <input type="checkbox" id="highContrast">
                 </div>
-                
-               
-        
+
+
+
                 <button class="save-settings-btn" id="saveSettings">Save Settings</button>
             </div>
         </div>
@@ -136,12 +138,13 @@
                         <option value="functional">Functional Bug</option>
                     </select>
                 </div>
-                
+
                 <div class="setting-group">
                     <label for="bugDescription">Bug Description:</label>
-                    <textarea id="bugDescription" placeholder="Please describe the bug you encountered..." rows="6"></textarea>
+                    <textarea id="bugDescription" placeholder="Please describe the bug you encountered..."
+                        rows="6"></textarea>
                 </div>
-                
+
                 <button class="save-settings-btn" id="reportBugBtn">Report</button>
             </div>
         </div>
@@ -151,20 +154,21 @@
     <div class="weather-widget" id="weatherWidget">
         <div class="weather-loading">Loading weather...</div>
     </div>
-    
-  
-    
+
+
+
     <!-- Notification Toast -->
     <div class="notification-toast" id="notificationToast" role="status" aria-live="polite"></div>
-    
+
     <!-- Leaflet JS -->
     <script src="lib/leaflet/leaflet.js"></script>
-    
+
     <!-- Weather API -->
-    <script src="weather.js"></script>
-    
+    <script src="ClientPack/source/script/weather.js"></script>
+
     <!-- Custom JS -->
-    <script src="app.js"></script>
-   
+    <script src="ClientPack/source/script/app.js"></script>
+
 </body>
+
 </html>
