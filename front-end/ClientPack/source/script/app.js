@@ -1,10 +1,360 @@
 // Leaflet map and markers
+const apiUrl = 'http://localhost:8080/api/v1';
+
+/*
+  Helper functions
+  - Network helpers
+  - UI helpers
+  - Dropdown helpers
+*/
+async function getPossibleLocations(partialStr) {
+    try {
+        const response = await fetch(`${apiUrl}/stops/search?q=${encodeURIComponent(partialStr)}`);
+        if (!response.ok) {
+            throw new Error('Network response was not ok');
+        }
+        const locations = await response.json();
+        return locations;
+    } catch (error) {
+        console.error('Error fetching locations:', error);
+        return [];
+    }
+}
+
+// Selected items and pending markers (if map not ready)
+let selectedStartItem = null;
+let selectedEndItem = null;
+let pendingStartItem = null;
+let pendingEndItem = null;
+
+function extractLatLng(item) {
+    if (!item) return null;
+    // common property names
+    const lat = item.lat || item.latitude || item.lat_deg || (item.geometry && item.geometry.coordinates && item.geometry.coordinates[1]);
+    const lon = item.lon || item.longitude || item.lon_deg || (item.geometry && item.geometry.coordinates && item.geometry.coordinates[0]);
+    if (lat == null || lon == null) return null;
+    const la = parseFloat(lat);
+    const lo = parseFloat(lon);
+    if (Number.isNaN(la) || Number.isNaN(lo)) return null;
+    return [la, lo];
+}
+
+function addStartMarker(item) {
+    const coords = extractLatLng(item);
+    selectedStartItem = item;
+    if (!coords) return;
+    if (!map) {
+        pendingStartItem = item;
+        return;
+    }
+    // remove existing marker
+    if (startMarker) {
+        map.removeLayer(startMarker);
+        startMarker = null;
+    }
+    startMarker = L.circleMarker(coords, {
+        radius: 8,
+        fillColor: '#27AE60',
+        color: '#ffffff',
+        weight: 2,
+        fillOpacity: 1
+    }).addTo(map).bindPopup(getLabelFromItem(item));
+    map.panTo(coords);
+}
+
+function addEndMarker(item) {
+    const coords = extractLatLng(item);
+    selectedEndItem = item;
+    if (!coords) return;
+    if (!map) {
+        pendingEndItem = item;
+        return;
+    }
+    if (endMarker) {
+        map.removeLayer(endMarker);
+        endMarker = null;
+    }
+    endMarker = L.circleMarker(coords, {
+        radius: 8,
+        fillColor: '#E74C3C',
+        color: '#ffffff',
+        weight: 2,
+        fillOpacity: 1
+    }).addTo(map).bindPopup(getLabelFromItem(item));
+    map.panTo(coords);
+}
+
+// Accessible notification function (UI helper)
+function showNotification(message) {
+    const toast = document.getElementById('notificationToast');
+    toast.textContent = message;
+    toast.classList.add('show');
+
+    setTimeout(() => {
+        toast.classList.remove('show');
+    }, 3000);
+}
+
+// Map / state variables
 let map = null;
 let startMarker = null;
 let endMarker = null;
 
- 
- 
+// DOM selectors
+let fromInput = document.getElementById('startPoint');
+let toInput = document.getElementById('endPoint');
+
+// Suggestions dropdown for `fromInput`
+// Create container for suggestions appended to body so it can overlay the map
+let fromSuggestions = document.getElementById('fromSuggestions');
+if (!fromSuggestions) {
+    fromSuggestions = document.createElement('div');
+    fromSuggestions.id = 'fromSuggestions';
+    fromSuggestions.className = 'suggestions-dropdown';
+    // append to body to avoid stacking context issues with map panes
+    document.body.appendChild(fromSuggestions);
+}
+
+// Suggestions dropdown for `toInput` (end point)
+let toSuggestions = document.getElementById('toSuggestions');
+if (!toSuggestions) {
+    toSuggestions = document.createElement('div');
+    toSuggestions.id = 'toSuggestions';
+    toSuggestions.className = 'suggestions-dropdown';
+    document.body.appendChild(toSuggestions);
+}
+
+function positionFromSuggestions() {
+    const rect = fromInput.getBoundingClientRect();
+    const scrollY = window.scrollY || window.pageYOffset;
+    const scrollX = window.scrollX || window.pageXOffset;
+    fromSuggestions.style.width = rect.width + 'px';
+    fromSuggestions.style.left = (rect.left + scrollX) + 'px';
+    fromSuggestions.style.top = (rect.bottom + scrollY + 6) + 'px';
+}
+
+function positionToSuggestions() {
+    const rect = toInput.getBoundingClientRect();
+    const scrollY = window.scrollY || window.pageYOffset;
+    const scrollX = window.scrollX || window.pageXOffset;
+    toSuggestions.style.width = rect.width + 'px';
+    toSuggestions.style.left = (rect.left + scrollX) + 'px';
+    toSuggestions.style.top = (rect.bottom + scrollY + 6) + 'px';
+}
+
+function clearFromSuggestions() {
+    fromSuggestions.innerHTML = '';
+    fromSuggestions.style.display = 'none';
+    fromSuggestions.dataset.active = '-1';
+}
+
+function getLabelFromItem(item) {
+    if (!item && item !== 0) return '';
+    if (typeof item === 'string') return item;
+    return item.name || item.label || item.display_name || item.stop_name || item.text || JSON.stringify(item);
+}
+
+function renderFromSuggestions(items) {
+    clearFromSuggestions();
+    if (!items || items.length === 0) return;
+    const list = document.createElement('ul');
+    list.setAttribute('role', 'listbox');
+    list.className = 'suggestions-list';
+
+    items.forEach((it, idx) => {
+        const label = getLabelFromItem(it);
+        const li = document.createElement('li');
+        li.className = 'suggestion-item';
+        li.setAttribute('role', 'option');
+        li.setAttribute('data-index', String(idx));
+        li.tabIndex = 0;
+        li.textContent = label;
+        li.addEventListener('click', () => {
+            selectedStartItem = it;
+            fromInput.value = label;
+            clearFromSuggestions();
+            fromInput.focus();
+            addStartMarker(it);
+        });
+        li.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                li.click();
+            }
+        });
+        list.appendChild(li);
+    });
+    // store items for later reference (keyboard selection)
+    fromSuggestions._items = items;
+
+    fromSuggestions.appendChild(list);
+    positionFromSuggestions();
+    fromSuggestions.style.display = 'block';
+}
+
+function clearToSuggestions() {
+    toSuggestions.innerHTML = '';
+    toSuggestions.style.display = 'none';
+}
+
+function renderToSuggestions(items) {
+    clearToSuggestions();
+    if (!items || items.length === 0) return;
+    const list = document.createElement('ul');
+    list.setAttribute('role', 'listbox');
+    list.className = 'suggestions-list';
+
+    items.forEach((it, idx) => {
+        const label = getLabelFromItem(it);
+        const li = document.createElement('li');
+        li.className = 'suggestion-item';
+        li.setAttribute('role', 'option');
+        li.setAttribute('data-index', String(idx));
+        li.tabIndex = 0;
+        li.textContent = label;
+        li.addEventListener('click', () => {
+            selectedEndItem = it;
+            toInput.value = label;
+            clearToSuggestions();
+            toInput.focus();
+            addEndMarker(it);
+        });
+        li.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                li.click();
+            }
+        });
+        list.appendChild(li);
+    });
+    toSuggestions._items = items;
+
+    toSuggestions.appendChild(list);
+    positionToSuggestions();
+    toSuggestions.style.display = 'block';
+    toSuggestions.dataset.active = '-1';
+}
+
+/* Keyboard navigation helpers */
+function setActiveSuggestion(container, idx) {
+    const items = Array.from(container.querySelectorAll('.suggestion-item'));
+    if (!items.length) return;
+    if (idx < 0) idx = items.length - 1;
+    if (idx >= items.length) idx = 0;
+    // remove previous
+    items.forEach((it) => {
+        it.classList.remove('suggestion-active');
+        it.setAttribute('aria-selected', 'false');
+    });
+    const chosen = items[idx];
+    if (chosen) {
+        chosen.classList.add('suggestion-active');
+        chosen.setAttribute('aria-selected', 'true');
+        chosen.focus();
+        container.dataset.active = String(idx);
+    }
+}
+
+function handleInputKeydown(e, inputEl, container, renderFnClear) {
+    const items = Array.from(container.querySelectorAll('.suggestion-item'));
+    if (!items.length) return;
+    let active = parseInt(container.dataset.active || '-1', 10);
+    if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        active = isNaN(active) ? -1 : active;
+        setActiveSuggestion(container, active + 1);
+    } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        active = isNaN(active) ? 0 : active;
+        setActiveSuggestion(container, active - 1);
+    } else if (e.key === 'Enter') {
+        // if an item is active, trigger click
+        if (!isNaN(active) && active >= 0) {
+            e.preventDefault();
+            const chosen = items[active];
+            if (chosen) chosen.click();
+        }
+    } else if (e.key === 'Escape') {
+        // close
+        container.style.display = 'none';
+        container.dataset.active = '-1';
+        inputEl.focus();
+    }
+}
+
+// Attach keyboard handling to inputs
+fromInput.addEventListener('keydown', (e) => handleInputKeydown(e, fromInput, fromSuggestions));
+toInput.addEventListener('keydown', (e) => handleInputKeydown(e, toInput, toSuggestions));
+
+/*
+  Event listeners - dropdown
+*/
+fromInput.addEventListener('input', async () => {
+    const q = fromInput.value.trim();
+    if (q.length < 3) {
+        clearFromSuggestions();
+        return; // Wait for at least 3 characters
+    }
+    try {
+        const locations = await getPossibleLocations(q);
+        // Render first 5 suggestions
+        renderFromSuggestions((locations || []).slice(0, 5));
+    } catch (err) {
+        console.error('Error fetching suggestions:', err);
+        clearFromSuggestions();
+    }
+});
+
+// Hide suggestions when clicking outside
+document.addEventListener('click', (e) => {
+    if (!fromSuggestions.contains(e.target) && e.target !== fromInput) {
+        clearFromSuggestions();
+    }
+    if (!toSuggestions.contains(e.target) && e.target !== toInput) {
+        clearToSuggestions();
+    }
+});
+
+// Reposition dropdown on scroll/resize and when input receives focus
+window.addEventListener('resize', () => {
+    if (fromSuggestions.style.display === 'block') positionFromSuggestions();
+    if (toSuggestions.style.display === 'block') positionToSuggestions();
+});
+window.addEventListener('scroll', () => {
+    if (fromSuggestions.style.display === 'block') positionFromSuggestions();
+    if (toSuggestions.style.display === 'block') positionToSuggestions();
+}, true);
+fromInput.addEventListener('focus', () => {
+    if (fromSuggestions.children.length) {
+        positionFromSuggestions();
+        fromSuggestions.style.display = 'block';
+    }
+});
+toInput.addEventListener('focus', () => {
+    if (toSuggestions.children.length) {
+        positionToSuggestions();
+        toSuggestions.style.display = 'block';
+    }
+});
+
+// Input listener for `toInput`
+toInput.addEventListener('input', async () => {
+    const q = toInput.value.trim();
+    if (q.length < 3) {
+        clearToSuggestions();
+        return; // Wait for at least 3 characters
+    }
+    try {
+        const locations = await getPossibleLocations(q);
+        // Render first 5 suggestions
+        renderToSuggestions((locations || []).slice(0, 5));
+    } catch (err) {
+        console.error('Error fetching suggestions (to):', err);
+        clearToSuggestions();
+    }
+});
+
+
 // Initialize map and click handlers
 document.addEventListener('DOMContentLoaded', () => {
     loadAccessibilitySettings();
@@ -17,8 +367,8 @@ document.addEventListener('DOMContentLoaded', () => {
     loadAccessibilitySettings();
     initializeLeafletMap();
 });
- 
- 
+
+
 function initializeLeafletMap() {
     // Define North Lancashire boundaries
     // Covers Lancaster, Morecambe, Preston, Blackpool, Fylde, and surrounding areas
@@ -26,34 +376,44 @@ function initializeLeafletMap() {
         [53.5, -3.1],  // Southwest corner (Blackpool area)
         [54.3, -2.2]   // Northeast corner (Lancaster/Pennines)
     ];
-   
+
     // Initialize the map centered on NW Lancashire (Preston area)
     // Preston coordinates: approximately 53.7632° N, 2.7031° W
     map = L.map('map', {
         maxBounds: northLancashireBounds,
         maxBoundsViscosity: 1.0,  // Makes bounds "hard" - prevents dragging outside
-        zoomControl: false 
+        zoomControl: false
     }).setView([53.7632, -2.7031], 10);
-   
+
     // Add OpenStreetMap tiles
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
         attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
         maxZoom: 19,
         minZoom: 8
     }).addTo(map);
-   
+
     // Fit the map to North Lancashire bounds on load
     map.fitBounds(northLancashireBounds);
-   
+
+    // If user selected items before map ready, add their markers now
+    if (pendingStartItem) {
+        addStartMarker(pendingStartItem);
+        pendingStartItem = null;
+    }
+    if (pendingEndItem) {
+        addEndMarker(pendingEndItem);
+        pendingEndItem = null;
+    }
+
     // Note: Map click handling for markers will be implemented in a future update
 }
- 
+
 
 // Route Planner Toggle functionality
 function initializePlannerToggle() {
     const plannerToggle = document.getElementById('plannerToggle');
     const routePlanner = document.querySelector('.route-planner');
-    
+
     plannerToggle.addEventListener('click', () => {
         const isCollapsed = routePlanner.classList.toggle('collapsed');
         plannerToggle.setAttribute('aria-expanded', !isCollapsed);
@@ -130,16 +490,16 @@ bugReportModal.addEventListener('click', (e) => {
 reportBugBtn.addEventListener('click', () => {
     const bugType = document.getElementById('bugType').value;
     const bugDescription = document.getElementById('bugDescription').value.trim();
-    
+
     if (!bugDescription) {
         showNotification('Please enter a bug description.');
         return;
     }
-    
+
     // Close modal and clear form
     bugReportModal.classList.remove('active');
     document.getElementById('bugDescription').value = '';
-    
+
     // Show confirmation notification
     const bugTypeText = bugType === 'ui' ? 'UI Bug' : 'Functional Bug';
     showNotification(`Thank you! Your ${bugTypeText} report has been submitted.`);
@@ -152,22 +512,22 @@ saveSettings.addEventListener('click', () => {
     // Apply font size - remove only the specific font size classes
     document.body.classList.remove('font-small', 'font-medium', 'font-large', 'font-extra-large');
     document.body.classList.add(`font-${fontSize}`);
-    
+
     // Apply high contrast
     if (highContrast) {
         document.body.classList.add('high-contrast');
     } else {
         document.body.classList.remove('high-contrast');
     }
-    
+
     // Save to localStorage
     localStorage.setItem('accessibility', JSON.stringify({
         fontSize,
         highContrast,
     }));
-    
+
     accessibilityModal.classList.remove('active');
-    
+
     // Show accessible notification
     showNotification('Accessibility settings saved successfully!');
 });
@@ -177,11 +537,11 @@ function loadAccessibilitySettings() {
     const saved = localStorage.getItem('accessibility');
     if (saved) {
         const settings = JSON.parse(saved);
-        
+
         document.getElementById('fontSize').value = settings.fontSize;
         document.getElementById('highContrast').checked = settings.highContrast;
 
-        
+
         // Apply settings
         document.body.classList.add(`font-${settings.fontSize}`);
         if (settings.highContrast) {
@@ -202,16 +562,16 @@ planRouteBtn.addEventListener('click', () => {
     const endPoint = document.getElementById('endPoint').value;
     const pathfinding = document.getElementById('pathfinding').value;
     const walkingSpeed = document.getElementById('walkingSpeed').value;
-    
+
     if (!startPoint || !endPoint) {
         routeContent.innerHTML = '<p style="color: #e74c3c;">Please click on the map to select both start and end points.</p>';
         return;
     }
-    
+
     // Generate sample route information (in a real app, this would call an API)
     const pathfindingText = pathfinding === 'fastest' ? 'Fastest Time' : 'Least Number of Changes';
     const speedText = walkingSpeed.charAt(0).toUpperCase() + walkingSpeed.slice(1);
-    
+
     routeContent.innerHTML = `
         <div style="margin-bottom: 15px;">
             <strong style="color: #2E5090;">Route Preferences:</strong>
@@ -228,7 +588,7 @@ planRouteBtn.addEventListener('click', () => {
             <p style="margin: 5px 0 0 0; font-size: 14px;">Your route has been calculated based on your preferences.</p>
         </div>
     `;
-    
+
     // Auto-collapse the planner after planning route
     const routePlanner = document.querySelector('.route-planner');
     const plannerToggle = document.getElementById('plannerToggle');
@@ -236,7 +596,7 @@ planRouteBtn.addEventListener('click', () => {
         routePlanner.classList.add('collapsed');
         plannerToggle.setAttribute('aria-expanded', 'false');
     }
-    
+
     // Note: Route drawing will be implemented when marker functionality is added
     // drawRouteLine();
 });
@@ -246,21 +606,21 @@ planRouteBtn.addEventListener('click', () => {
 function drawRouteLine() {
     const mapElement = document.getElementById('map');
     const svg = mapElement.querySelector('svg');
-    
+
     if (!svg || !startMarkerEl || !endMarkerEl) return;
-    
+
     // Remove existing route line
     const existingLine = svg.querySelector('#route-line');
     if (existingLine) {
         existingLine.remove();
     }
-    
+
     // Get marker positions - parse without 'px' suffix
     const startX = parseFloat(startMarkerEl.style.left.replace('px', ''));
     const startY = parseFloat(startMarkerEl.style.top.replace('px', ''));
     const endX = parseFloat(endMarkerEl.style.left.replace('px', ''));
     const endY = parseFloat(endMarkerEl.style.top.replace('px', ''));
-    
+
     // Create route line
     const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
     line.setAttribute('id', 'route-line');
@@ -272,18 +632,9 @@ function drawRouteLine() {
     line.setAttribute('stroke-width', '4');
     line.setAttribute('stroke-dasharray', '10,5');
     line.setAttribute('opacity', '0.8');
-    
+
     svg.appendChild(line);
 }
 */
 
-// Accessible notification function
-function showNotification(message) {
-    const toast = document.getElementById('notificationToast');
-    toast.textContent = message;
-    toast.classList.add('show');
-    
-    setTimeout(() => {
-        toast.classList.remove('show');
-    }, 3000);
-}
+// (Notification helper defined above)
