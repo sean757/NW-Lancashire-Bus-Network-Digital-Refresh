@@ -4,9 +4,9 @@
 const WEATHER_CONFIG = {
     apiKey: '178a080c9e780ddc93f4f4a9153f93c1', // Replace with your OpenWeatherMap API key
     // North Lancashire coordinates (centered around Lancaster)
-    latitude: 54.0465,
-    longitude: -2.8011,
-    city: 'Lancaster, UK'
+    latitude: 53.77838,
+    longitude: -2.71330,
+    city: 'Preston, UK'
 };
 
 // Initialize weather widget on page load
@@ -21,20 +21,20 @@ document.addEventListener('DOMContentLoaded', () => {
  */
 async function fetchWeather() {
     const weatherWidget = document.getElementById('weatherWidget');
-    
+
     try {
         // Call local proxy to avoid browser CORS restrictions
-        const apiUrl = `/weather?lat=${WEATHER_CONFIG.latitude}&lon=${WEATHER_CONFIG.longitude}`;
-        
+        const apiUrl = `http://localhost:8080/api/v1/weather?lat=${WEATHER_CONFIG.latitude}&lon=${WEATHER_CONFIG.longitude}`;
+
         const response = await fetch(apiUrl);
-        
+
         if (!response.ok) {
             throw new Error(`Status ${response.status}: ${response.statusText}`);
         }
-        
+
         const data = await response.json();
         displayWeather(data);
-        
+
     } catch (error) {
         console.error('Detailed Error:', error);
         displayWeatherError(`Error: ${error.message}`);
@@ -46,14 +46,14 @@ async function fetchWeather() {
  */
 function displayWeather(data) {
     const weatherWidget = document.getElementById('weatherWidget');
-    
+
     // Extract weather data from the nested structure
     const weatherData = data.weather;
     const temperature = Math.round(weatherData.main.temp);
     const description = weatherData.weather[0].description;
     const feelsLike = Math.round(weatherData.main.feels_like);
     const weatherIcon = weatherData.weather[0].icon;
-    
+
     weatherWidget.innerHTML = `
         <div class="weather-header">
             <img src="https://openweathermap.org/img/wn/${weatherIcon}@2x.png" 
@@ -71,7 +71,7 @@ function displayWeather(data) {
             
         </div>
     `;
-    
+
     weatherWidget.classList.remove('error');
 }
 
@@ -92,7 +92,7 @@ function displayWeatherError(message) {
  * Capitalize first letter of each word
  */
 function capitalizeWords(str) {
-    return str.split(' ').map(word => 
+    return str.split(' ').map(word =>
         word.charAt(0).toUpperCase() + word.slice(1)
     ).join(' ');
 }
