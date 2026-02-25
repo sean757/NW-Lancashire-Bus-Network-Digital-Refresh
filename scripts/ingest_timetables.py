@@ -10,7 +10,7 @@ from datetime import datetime
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 DB_CONFIG = {
-    "host": "172.17.0.1",
+    "host": "localhost",
     "port": "5432",
     "user": "transport",
     "password": "transport_dev",
@@ -21,31 +21,7 @@ DB_CONFIG = {
 DISCOVERY_URL = "https://transport.scc.lancs.ac.uk/bus/times/SCCU"
 
 
-def setup_timetable_schema(conn):
-    """Create tables as per Design Report requirements[cite: 142]."""
-    with conn.cursor() as cur:
-        # Table for Bus route definitions [cite: 142]
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS routes (
-                id SERIAL PRIMARY KEY,
-                service_code VARCHAR(100),
-                line_name VARCHAR(50),
-                stop_atco_code VARCHAR(20),
-                sequence_number INTEGER
-            );
-        """)
-        # Table for Scheduled departure times [cite: 142]
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS timetables (
-                id SERIAL PRIMARY KEY,
-                service_code VARCHAR(100),
-                stop_atco_code VARCHAR(20),
-                departure_time TIME,
-                journey_code VARCHAR(100)
-            );
-        """)
-        conn.commit()
-        print(" Database schema updated for Timetables and Routes.")
+# Removed setup_timetable_schema() - schema is managed by init_db.sql
 
 
 def parse_txc_xml(conn, xml_content):
@@ -89,7 +65,7 @@ def run_ingestion():
     """Main execution logic using results from Discovery API."""
     try:
         conn = psycopg2.connect(**DB_CONFIG)
-        setup_timetable_schema(conn)
+        # Removed setup_timetable_schema(conn) - run init_db.sql first
 
         print(f" Fetching discovery data from {DISCOVERY_URL}...")
         response = requests.get(DISCOVERY_URL, verify=False)

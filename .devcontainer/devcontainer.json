@@ -5,8 +5,13 @@
   "workspaceFolder": "/workspace",
   "updateRemoteUserUID": false,
   "remoteUser": "root",
-  "postCreateCommand": "pip install fastapi uvicorn[standard] asyncpg sqlalchemy[asyncio] pydantic-settings stomp.py httpx python-dotenv",
-  "forwardPorts": [8000],
+  "runArgs": [
+    "--network=host"
+  ],
+  "postCreateCommand": "apt-get update && apt-get install -y postgresql-client && pip install fastapi uvicorn[standard] asyncpg sqlalchemy[asyncio] pydantic-settings stomp.py httpx python-dotenv lxml psycopg2-binary requests",
+  "forwardPorts": [
+    8000
+  ],
   "customizations": {
     "vscode": {
       "extensions": [
