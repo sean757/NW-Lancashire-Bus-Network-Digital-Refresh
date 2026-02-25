@@ -64,7 +64,7 @@ async def get_weather(lat: float = 54.05, lon: float = -2.80):
 # Routers (uncomment as they're built)
 # ==========================================
 
-# from app.routers import stops, journey, disruptions
-# app.include_router(stops.router, prefix="/api/v1/stops", tags=["Stops"])
+from app.routers import stops, disruptions #, journey
+app.include_router(stops.router, prefix="/api/v1/stops", tags=["Stops"])
 # app.include_router(journey.router, prefix="/api/v1/journey", tags=["Journey"])
-# app.include_router(disruptions.router, prefix="/api/v1/disruptions", tags=["Disruptions"])
+app.include_router(disruptions.router, prefix="/api/v1/disruptions", tags=["Disruptions"])
