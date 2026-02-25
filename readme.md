@@ -76,7 +76,11 @@ uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload
 
 API docs available at: http://localhost:8080/docs
 
-### 7. Verify everything works
+### 7. Verify front-end works
+
+Open `http://localhost:3000` in your browser to view the front-end webpage
+
+### 8. Verify everything works
 
 With the server running, open a second terminal and test:
 
