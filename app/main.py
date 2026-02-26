@@ -2,10 +2,13 @@
 SCC200 Transport API — Main application entry point.
 """
 
+import asyncio
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.database import init_db, close_db
+from app.routers import stops, disruptions, journey
+from app.services.route_cache import route_cache
 import httpx
 
 
@@ -28,6 +31,9 @@ app.add_middleware(
 @app.on_event("startup")
 async def startup():
     await init_db()
+    # Load route cache and start background refresh
+    await route_cache.load()
+    asyncio.create_task(route_cache.refresh_loop())
 
 
 @app.on_event("shutdown")
@@ -41,7 +47,12 @@ async def shutdown():
 
 @app.get("/health")
 async def health_check():
-    return {"status": "ok"}
+    return {
+        "status": "ok",
+        "cache_loaded": route_cache._loaded,
+        "routes_cached": len(route_cache.routes),
+        "stops_with_routes": len(route_cache.stop_routes),
+    }
 
 
 # ==========================================
@@ -61,10 +72,10 @@ async def get_weather(lat: float = 54.05, lon: float = -2.80):
 
 
 # ==========================================
-# Routers (uncomment as they're built)
+# Routers
 # ==========================================
 
-from app.routers import stops, disruptions #, journey
 app.include_router(stops.router, prefix="/api/v1/stops", tags=["Stops"])
-# app.include_router(journey.router, prefix="/api/v1/journey", tags=["Journey"])
-app.include_router(disruptions.router, prefix="/api/v1/disruptions", tags=["Disruptions"])
+app.include_router(disruptions.router,
+                   prefix="/api/v1/disruptions", tags=["Disruptions"])
+app.include_router(journey.router, prefix="/api/v1/journey", tags=["Journey"])
