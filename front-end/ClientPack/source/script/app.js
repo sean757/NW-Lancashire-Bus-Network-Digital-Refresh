@@ -27,6 +27,46 @@ let selectedEndItem = null;
 let pendingStartItem = null;
 let pendingEndItem = null;
 
+// Timers for debounced exact-match lookup
+let fromInputTimer = null;
+let toInputTimer = null;
+
+/* Loading indicator helpers for inputs */
+function ensureInputLoadingEl(input) {
+    if (!input || !input.parentElement) return null;
+    const parent = input.parentElement;
+    let el = parent.querySelector('.input-loading');
+    if (!el) {
+        el = document.createElement('span');
+        el.className = 'input-loading';
+        el.setAttribute('aria-hidden', 'true');
+        parent.appendChild(el);
+    }
+    return el;
+}
+
+function positionInputLoading(input, el) {
+    if (!input || !el) return;
+    // Calculate vertical center of the input relative to its parent (.input-group)
+    const parentRect = input.parentElement.getBoundingClientRect();
+    const inputRect = input.getBoundingClientRect();
+    const top = input.offsetTop + (input.offsetHeight / 2);
+    el.style.top = top + 'px';
+}
+
+function showInputLoading(input) {
+    const el = ensureInputLoadingEl(input);
+    if (!el) return;
+    positionInputLoading(input, el);
+    el.style.display = 'block';
+}
+
+function hideInputLoading(input) {
+    if (!input || !input.parentElement) return;
+    const el = input.parentElement.querySelector('.input-loading');
+    if (el) el.style.display = 'none';
+}
+
 function extractLatLng(item) {
     if (!item) return null;
     // common property names
@@ -174,6 +214,9 @@ function renderFromSuggestions(items) {
             fromInput.value = label;
             clearFromSuggestions();
             fromInput.focus();
+            // cancel any pending exact-match lookup and hide loader
+            if (fromInputTimer) { clearTimeout(fromInputTimer); fromInputTimer = null; }
+            hideInputLoading(fromInput);
             addStartMarker(it);
         });
         li.addEventListener('keydown', (e) => {
@@ -217,6 +260,8 @@ function renderToSuggestions(items) {
             toInput.value = label;
             clearToSuggestions();
             toInput.focus();
+            if (toInputTimer) { clearTimeout(toInputTimer); toInputTimer = null; }
+            hideInputLoading(toInput);
             addEndMarker(it);
         });
         li.addEventListener('keydown', (e) => {
@@ -291,6 +336,19 @@ toInput.addEventListener('keydown', (e) => handleInputKeydown(e, toInput, toSugg
 */
 fromInput.addEventListener('input', async () => {
     const q = fromInput.value.trim();
+    // If user changed/cleared the input so it no longer exactly matches the selected item,
+    // remove the marker and clear the selected state.
+    if (selectedStartItem) {
+        const selLabel = getLabelFromItem(selectedStartItem).trim().toLowerCase();
+        if (q.toLowerCase() !== selLabel) {
+            if (startMarker && map) {
+                map.removeLayer(startMarker);
+                startMarker = null;
+            }
+            selectedStartItem = null;
+            pendingStartItem = null;
+        }
+    }
     if (q.length < 3) {
         clearFromSuggestions();
         return; // Wait for at least 3 characters
@@ -303,6 +361,41 @@ fromInput.addEventListener('input', async () => {
         console.error('Error fetching suggestions:', err);
         clearFromSuggestions();
     }
+});
+
+// Debounced exact-match lookup after 2s of no typing
+fromInput.addEventListener('input', () => {
+    if (fromInputTimer) clearTimeout(fromInputTimer);
+    const q = fromInput.value.trim();
+    // If there's nothing to search for, ensure loader is hidden
+    if (!q) {
+        hideInputLoading(fromInput);
+        return;
+    }
+    // show loader for the 2s debounce period
+    showInputLoading(fromInput);
+    fromInputTimer = setTimeout(async () => {
+        // timer fired -- hide loader
+        fromInputTimer = null;
+        hideInputLoading(fromInput);
+        if (!q) return;
+        // If already selected and matches, skip
+        if (selectedStartItem && getLabelFromItem(selectedStartItem).trim().toLowerCase() === q.toLowerCase()) return;
+        try {
+            const locations = await getPossibleLocations(q);
+            if (locations && locations.length) {
+                const match = locations.find((it) => getLabelFromItem(it).trim().toLowerCase() === q.toLowerCase());
+                if (match) {
+                    selectedStartItem = match;
+                    fromInput.value = getLabelFromItem(match);
+                    clearFromSuggestions();
+                    addStartMarker(match);
+                }
+            }
+        } catch (err) {
+            console.error('Exact-match lookup error (from):', err);
+        }
+    }, 2000);
 });
 
 // Hide suggestions when clicking outside
@@ -340,6 +433,19 @@ toInput.addEventListener('focus', () => {
 // Input listener for `toInput`
 toInput.addEventListener('input', async () => {
     const q = toInput.value.trim();
+    // If user changed/cleared the input so it no longer exactly matches the selected item,
+    // remove the marker and clear the selected state.
+    if (selectedEndItem) {
+        const selLabel = getLabelFromItem(selectedEndItem).trim().toLowerCase();
+        if (q.toLowerCase() !== selLabel) {
+            if (endMarker && map) {
+                map.removeLayer(endMarker);
+                endMarker = null;
+            }
+            selectedEndItem = null;
+            pendingEndItem = null;
+        }
+    }
     if (q.length < 3) {
         clearToSuggestions();
         return; // Wait for at least 3 characters
@@ -352,6 +458,37 @@ toInput.addEventListener('input', async () => {
         console.error('Error fetching suggestions (to):', err);
         clearToSuggestions();
     }
+});
+
+// Debounced exact-match lookup after 2s of no typing
+toInput.addEventListener('input', () => {
+    if (toInputTimer) clearTimeout(toInputTimer);
+    const q = toInput.value.trim();
+    if (!q) {
+        hideInputLoading(toInput);
+        return;
+    }
+    showInputLoading(toInput);
+    toInputTimer = setTimeout(async () => {
+        toInputTimer = null;
+        hideInputLoading(toInput);
+        if (!q) return;
+        if (selectedEndItem && getLabelFromItem(selectedEndItem).trim().toLowerCase() === q.toLowerCase()) return;
+        try {
+            const locations = await getPossibleLocations(q);
+            if (locations && locations.length) {
+                const match = locations.find((it) => getLabelFromItem(it).trim().toLowerCase() === q.toLowerCase());
+                if (match) {
+                    selectedEndItem = match;
+                    toInput.value = getLabelFromItem(match);
+                    clearToSuggestions();
+                    addEndMarker(match);
+                }
+            }
+        } catch (err) {
+            console.error('Exact-match lookup error (to):', err);
+        }
+    }, 2000);
 });
 
 

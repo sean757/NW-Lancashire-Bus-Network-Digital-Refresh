@@ -240,6 +240,37 @@ body {
     transition: border-color 0.3s;
 }
 
+/* Reserve space for inline loading indicator inside inputs */
+.input-group input {
+    padding-right: 40px;
+}
+
+/* Small spinner shown at end of input during exact-match debounce */
+.input-loading {
+    display: none;
+    position: absolute;
+    right: 10px;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    border: 2px solid rgba(0, 0, 0, 0.12);
+    border-top-color: var(--primary-color);
+    box-shadow: none;
+    transform: translateY(-50%);
+    animation: spin 0.9s linear infinite;
+    z-index: 1002;
+}
+
+@keyframes spin {
+    from {
+        transform: translateY(-50%) rotate(0deg);
+    }
+
+    to {
+        transform: translateY(-50%) rotate(360deg);
+    }
+}
+
 .input-group input:focus,
 .input-group select:focus {
     outline: none;
