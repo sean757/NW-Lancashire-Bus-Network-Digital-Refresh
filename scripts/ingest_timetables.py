@@ -74,11 +74,13 @@ def parse_txc_xml(conn, xml_content, operator_code):
         for link in section.findall('txc:JourneyPatternTimingLink', namespaces=NS):
             from_elem = link.find('txc:From', namespaces=NS)
             to_elem = link.find('txc:To', namespaces=NS)
-            run_time = parse_duration(link.findtext('txc:RunTime', namespaces=NS))
+            run_time = parse_duration(
+                link.findtext('txc:RunTime', namespaces=NS))
 
             if from_elem is not None and not stops:
                 seq = int(from_elem.get('SequenceNumber', 0))
-                stop_ref = from_elem.findtext('txc:StopPointRef', namespaces=NS)
+                stop_ref = from_elem.findtext(
+                    'txc:StopPointRef', namespaces=NS)
                 if stop_ref:
                     stops.append((stop_ref, seq, 0))
 
@@ -95,8 +97,10 @@ def parse_txc_xml(conn, xml_content, operator_code):
     for service in root.findall('.//txc:Service', namespaces=NS):
         for jp in service.findall('.//txc:JourneyPattern', namespaces=NS):
             jp_id = jp.get('id')
-            direction = jp.findtext('txc:Direction', namespaces=NS) or 'outbound'
-            section_ref = jp.findtext('txc:JourneyPatternSectionRefs', namespaces=NS)
+            direction = jp.findtext(
+                'txc:Direction', namespaces=NS) or 'outbound'
+            section_ref = jp.findtext(
+                'txc:JourneyPatternSectionRefs', namespaces=NS)
             if jp_id and section_ref:
                 patterns[jp_id] = (section_ref, direction)
 
@@ -119,6 +123,10 @@ def parse_txc_xml(conn, xml_content, operator_code):
     route_id = service_code
 
     with conn.cursor() as cur:
+        # Load valid stop IDs from our database
+        cur.execute("SELECT stop_id FROM stops")
+        valid_stops = {row[0] for row in cur.fetchall()}
+
         # 4. Insert into routes table
         cur.execute("""
             INSERT INTO routes (route_id, route_name, operator, description, route_type)
@@ -135,6 +143,8 @@ def parse_txc_xml(conn, xml_content, operator_code):
             if section_id not in sections:
                 continue
             for stop_ref, seq, _ in sections[section_id]:
+                if stop_ref not in valid_stops:
+                    continue
                 key = (route_id, stop_ref, direction, seq)
                 if key not in route_stops_inserted:
                     cur.execute("""
@@ -149,7 +159,8 @@ def parse_txc_xml(conn, xml_content, operator_code):
         for vj in root.findall('.//txc:VehicleJourney', namespaces=NS):
             departure_str = vj.findtext('txc:DepartureTime', namespaces=NS)
             jp_ref = vj.findtext('txc:JourneyPatternRef', namespaces=NS)
-            vj_code = vj.findtext('txc:VehicleJourneyCode', namespaces=NS) or ''
+            vj_code = vj.findtext(
+                'txc:VehicleJourneyCode', namespaces=NS) or ''
 
             if not departure_str or not jp_ref or jp_ref not in patterns:
                 continue
@@ -164,12 +175,20 @@ def parse_txc_xml(conn, xml_content, operator_code):
 
             # Calculate arrival/departure times by accumulating run times
             dep_parts = departure_str.split(':')
-            base_hour, base_min, base_sec = int(dep_parts[0]), int(dep_parts[1]), int(dep_parts[2]) if len(dep_parts) > 2 else 0
+            base_hour, base_min, base_sec = int(dep_parts[0]), int(
+                dep_parts[1]), int(dep_parts[2]) if len(dep_parts) > 2 else 0
             cumulative_secs = base_hour * 3600 + base_min * 60 + base_sec
 
             for stop_ref, seq, run_time in sections[section_id]:
                 arrival_secs = cumulative_secs
                 departure_secs = cumulative_secs
+
+                # Always accumulate time even if we skip the stop
+                cumulative_secs += run_time
+
+                # Skip stops not in our database
+                if stop_ref not in valid_stops:
+                    continue
 
                 # Convert seconds back to time string
                 arr_h = (arrival_secs // 3600) % 24
@@ -185,10 +204,10 @@ def parse_txc_xml(conn, xml_content, operator_code):
                 """, (route_id, stop_ref, vj_code, arrival_time, departure_time, seq, direction, days_bitmask, start_date, end_date))
 
                 journey_count += 1
-                cumulative_secs += run_time
 
         if journey_count > 0:
-            print(f"      Route {line_name} ({route_id}): {journey_count} timetable entries")
+            print(
+                f"      Route {line_name} ({route_id}): {journey_count} timetable entries")
 
     conn.commit()
 
@@ -216,10 +235,12 @@ def run_ingestion():
 
         for operator in OPERATORS:
             discovery_url = f"https://transport.scc.lancs.ac.uk/bus/times/{operator}"
-            print(f"\n Fetching discovery data for {operator} from {discovery_url}...")
+            print(
+                f"\n Fetching discovery data for {operator} from {discovery_url}...")
 
             try:
-                response = requests.get(discovery_url, verify=False, timeout=15)
+                response = requests.get(
+                    discovery_url, verify=False, timeout=15)
                 data = response.json()
             except Exception as e:
                 print(f"   Error fetching {operator}: {e}")
