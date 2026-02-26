@@ -6,16 +6,16 @@
 */
 
 
-.logo{
-width: 100px;
- position: absolute;
+.logo {
+    width: 100px;
+    position: absolute;
 
-  right: 0;
-    }
+    right: 0;
+}
 
 :root {
     --primary-color: #102345;
-    --primary-color-light:#ba7200; 
+    --primary-color-light: #ba7200;
     --secondary-color: #F39C12;
     --accent-color: #27AE60;
     --background-color: #f5f5f5;
@@ -31,7 +31,8 @@ width: 100px;
     box-sizing: border-box;
 }
 
-html, body {
+html,
+body {
     height: 100%;
 }
 
@@ -219,6 +220,7 @@ body {
 .input-group {
     flex: 1;
     min-width: 200px;
+    position: relative;
 }
 
 .input-group label {
@@ -236,6 +238,37 @@ body {
     border-radius: 4px;
     font-size: 14px;
     transition: border-color 0.3s;
+}
+
+/* Reserve space for inline loading indicator inside inputs */
+.input-group input {
+    padding-right: 40px;
+}
+
+/* Small spinner shown at end of input during exact-match debounce */
+.input-loading {
+    display: none;
+    position: absolute;
+    right: 10px;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    border: 2px solid rgba(0, 0, 0, 0.12);
+    border-top-color: var(--primary-color);
+    box-shadow: none;
+    transform: translateY(-50%);
+    animation: spin 0.9s linear infinite;
+    z-index: 1002;
+}
+
+@keyframes spin {
+    from {
+        transform: translateY(-50%) rotate(0deg);
+    }
+
+    to {
+        transform: translateY(-50%) rotate(360deg);
+    }
 }
 
 .input-group input:focus,
@@ -275,7 +308,7 @@ body {
     z-index: 1;
 }
 
-.route-planner.collapsed ~ .map-container #map {
+.route-planner.collapsed~.map-container #map {
     height: calc(100vh - 120px);
 }
 
@@ -442,7 +475,7 @@ body {
     width: 100%;
     transition: background-color 0.3s;
     background-color: #229954;
-}   
+}
 
 .save-settings-btn:hover {
     background-color: #229954;
@@ -633,70 +666,137 @@ body.high-contrast .input-group select {
     .header h1 {
         font-size: 20px;
     }
-    
+
     .planner-toggle {
         padding: 12px 20px;
         font-size: 16px;
     }
-    
+
     .planner-content {
         padding: 20px 15px;
     }
-    
+
     .route-planner.collapsed .planner-content {
         padding: 0 15px;
     }
-    
+
     .planner-row {
         flex-direction: column;
     }
-    
+
     .input-group {
         width: 100%;
     }
-    
+
     .route-display {
         width: calc(100% - 40px);
         max-height: 300px;
     }
-    
+
     #map {
         height: calc(100vh - 260px);
     }
-    
-    .route-planner.collapsed ~ .map-container #map {
+
+    .route-planner.collapsed~.map-container #map {
         height: calc(100vh - 140px);
     }
-    
+
     .weather-widget {
         width: 150px;
         padding: 15px;
         bottom: 100px;
     }
-    
-    
+
+
 }
 
 @media (max-width: 480px) {
     .header {
         padding: 15px 20px;
     }
-    
+
     .route-planner {
         padding: 20px 15px;
     }
-    
+
     .route-display {
         top: 10px;
         right: 10px;
         width: calc(100% - 20px);
     }
-    
+
     .weather-widget {
         width: calc(100% - 40px);
         left: 20px;
         bottom: 20px;
     }
-    
 
+
+}
+
+/* Suggestions dropdown styles */
+#fromSuggestions {
+    display: none;
+    /* shown via JS when needed */
+    position: absolute;
+    background: var(--white);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    box-shadow: 0 6px 18px rgba(15, 23, 42, 0.12);
+    z-index: 99999;
+    /* ensure overlays Leaflet map panes */
+    max-height: 260px;
+    overflow: auto;
+    padding: 6px 0;
+}
+
+#fromSuggestions .suggestions-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.suggestion-item {
+    padding: 10px 12px;
+    cursor: pointer;
+    font-size: 14px;
+    color: var(--text-color);
+    transition: background-color 0.14s ease, color 0.14s ease;
+}
+
+.suggestion-item:hover,
+.suggestion-item:focus {
+    background-color: rgba(46, 80, 144, 0.06);
+    outline: none;
+}
+
+.suggestion-item+.suggestion-item {
+    border-top: 1px solid rgba(0, 0, 0, 0.04);
+}
+
+@media (max-width: 480px) {
+    #fromSuggestions {
+        max-height: 200px;
+    }
+}
+
+/* Duplicate styles for the end-point suggestions (same look as fromSuggestions) */
+#toSuggestions {
+    display: none;
+    /* shown via JS when needed */
+    position: absolute;
+    background: var(--white);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    box-shadow: 0 6px 18px rgba(15, 23, 42, 0.12);
+    z-index: 99999;
+    max-height: 260px;
+    overflow: auto;
+    padding: 6px 0;
+}
+
+@media (max-width: 480px) {
+    #toSuggestions {
+        max-height: 200px;
+    }
 }
