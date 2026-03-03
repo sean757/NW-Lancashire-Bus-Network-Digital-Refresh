@@ -136,3 +136,19 @@ CREATE TABLE IF NOT EXISTS delay_statistics (
 
 CREATE INDEX IF NOT EXISTS idx_delay_stats_date ON delay_statistics(date);
 CREATE INDEX IF NOT EXISTS idx_delay_stats_route ON delay_statistics(route_id);
+
+--Rail Info
+CREATE TABLE rail_stops (
+    atco_code TEXT PRIMARY KEY,
+    common_name TEXT,
+    stop_type TEXT,
+    longitude DOUBLE PRECISION,
+    latitude DOUBLE PRECISION
+);
+
+CREATE TABLE rail_corpus (
+    stanox TEXT PRIMARY KEY,
+    tiploc TEXT,
+    crs_code TEXT,
+    description TEXT
+);
