@@ -872,7 +872,7 @@ function clearRouteLayers() {
 
 // OpenRouteService API key – replace with your key from https://openrouteservice.org/
 // Note: as this is client-side code the key will be visible in the browser source.
-const ORS_API_KEY = 'YOUR_ORS_API_KEY_HERE';
+const ORS_API_KEY = 'eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjdmZDJkOGZmNzM4MTQyMjk5ZDhhYmM2MGIxNTZiMWU4IiwiaCI6Im11cm11cjY0In0=';
 
 // Cache for ORS route responses keyed by "lat,lon|lat,lon"
 const orsCache = {};
