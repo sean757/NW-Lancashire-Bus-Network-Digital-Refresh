@@ -870,30 +870,37 @@ function clearRouteLayers() {
     }
 }
 
-// Cache for OSRM route responses keyed by "lat,lon|lat,lon"
-const osrmCache = {};
+// OpenRouteService API key – replace with your key from https://openrouteservice.org/
+// Note: as this is client-side code the key will be visible in the browser source.
+const ORS_API_KEY = 'YOUR_ORS_API_KEY_HERE';
+
+// Cache for ORS route responses keyed by "lat,lon|lat,lon"
+const orsCache = {};
 async function routeAlongRoad(a, b, routeType = 'driving') {
     console.log("Creating route with type " + routeType);
     // a and b are [lat, lon]
     if (!a || !b) return null;
     const key = `${a[0]},${a[1]}|${b[0]},${b[1]}`;
-    if (osrmCache[key]) {
+    if (orsCache[key]) {
         console.log("Using cached route for key " + key);
-        return osrmCache[key];
+        return orsCache[key];
     };
+    // Map generic profile names to ORS profile names
+    const profileMap = { driving: 'driving-car', walking: 'foot-walking' };
+    const profile = profileMap[routeType] || 'driving-car';
     try {
-        const url = `https://router.project-osrm.org/route/v1/${routeType}/${a[1]},${a[0]};${b[1]},${b[0]}?overview=full&geometries=geojson&alternatives=false`;
+        const url = `https://api.openrouteservice.org/v2/directions/${profile}?api_key=${ORS_API_KEY}&start=${a[1]},${a[0]}&end=${b[1]},${b[0]}`;
         const res = await fetch(url);
         console.log(res);
         if (!res.ok) return null;
         const body = await res.json();
-        if (body && body.routes && body.routes.length) {
-            const coords = body.routes[0].geometry.coordinates.map(c => [c[1], c[0]]);
-            osrmCache[key] = coords;
+        if (body && body.features && body.features.length) {
+            const coords = body.features[0].geometry.coordinates.map(c => [c[1], c[0]]);
+            orsCache[key] = coords;
             return coords;
         }
     } catch (err) {
-        console.error('OSRM request failed', err);
+        console.error('OpenRouteService request failed', err);
     }
     return null;
 }
@@ -1000,7 +1007,7 @@ async function drawJourneyOnMap(journey) {
         }
         // Draw a polyline for this leg
         if (a && b) {
-            // Draw a polyline for this leg. Prefer routing geometry from OSRM
+            // Draw a polyline for this leg. Prefer routing geometry from OpenRouteService
             if (a && b) {
                 try {
                     const routed = await routeAlongRoad(a, b);
