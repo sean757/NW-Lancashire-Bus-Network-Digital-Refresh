@@ -13,6 +13,19 @@
     right: 0;
 }
 
+@media (max-width: 414px) {
+    .logo {
+        width: 70px;
+    }
+}
+
+@media (max-width: 390px) {
+    .logo {
+        width: 0px;
+    }
+}
+
+
 :root {
     --primary-color: #102345;
     --primary-color-light: #ba7200;
@@ -365,7 +378,7 @@ body {
 .route-display h3 {
     color: var(--primary-color);
     margin-bottom: 15px;
-    font-size: 18px;
+    font-size: 1.125em;
     border-bottom: 2px solid var(--secondary-color);
     padding-bottom: 10px;
 }
@@ -373,6 +386,7 @@ body {
 .route-content {
     color: var(--text-color);
     line-height: 1.6;
+    font-size: 1em;
 }
 
 .route-content p {

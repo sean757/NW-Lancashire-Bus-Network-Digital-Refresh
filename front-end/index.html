@@ -24,6 +24,7 @@
         <ul class="sidebar-menu">
             <li><a href="#" class="active">Home</a></li>
             <li><a href="#" id="accessibilityLink">Accessibility Settings</a></li>
+            <li><a href="#" id="languageLink">Languages</a></li>
             <li><a href="#" id="reportBugLink">Report Bug</a></li>
         </ul>
     </nav>
@@ -146,6 +147,26 @@
                 </div>
 
                 <button class="save-settings-btn" id="reportBugBtn">Report</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Language Selection Modal -->
+    <div class="modal" id="languageModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Language / 语言</h2>
+                <button class="close-btn" id="closeLanguageModal" aria-label="Close language settings">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="setting-group">
+                    <label for="languageSelect">Select Language / 选择语言:</label>
+                    <select id="languageSelect">
+                        <option value="en" selected>English</option>
+                        <option value="zh">中文 (Chinese)</option>
+                    </select>
+                </div>
+                <button class="save-settings-btn" id="saveLanguage">Apply / 应用</button>
             </div>
         </div>
     </div>
