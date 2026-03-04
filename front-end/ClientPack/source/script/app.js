@@ -1005,25 +1005,10 @@ async function drawJourneyOnMap(journey) {
             const popupB = `<div><strong>${leg.destination_stop_name || leg.to_stop || leg.destination_stop_id || ''}</strong>${leg.arrival_time ? `<div style="color:#E74C3C;font-weight:600;">Arr: ${leg.arrival_time}</div>` : ''}</div>`;
             L.circleMarker(b, { radius: 6, color: '#2E5090', fillColor: '#fff', weight: 2 }).addTo(routeLayerGroup).bindPopup(popupB);
         }
-        // Draw a polyline for this leg
+        // Draw a straight line for this (non-walking) leg
         if (a && b) {
-            // Draw a polyline for this leg. Prefer routing geometry from OpenRouteService
-            if (a && b) {
-                try {
-                    const routed = await routeAlongRoad(a, b);
-                    if (routed && routed.length) {
-                        L.polyline(routed, { color: '#F39C12', weight: 4, opacity: 0.95 }).addTo(routeLayerGroup);
-                        lastPoint = routed[routed.length - 1];
-                    } else {
-                        L.polyline([a, b], { color: '#F39C12', weight: 4, opacity: 0.85 }).addTo(routeLayerGroup);
-                        lastPoint = b;
-                    }
-                } catch (err) {
-                    console.error('Routing error, falling back to straight line', err);
-                    L.polyline([a, b], { color: '#F39C12', weight: 4, opacity: 0.85 }).addTo(routeLayerGroup);
-                    lastPoint = b;
-                }
-            }
+            L.polyline([a, b], { color: '#F39C12', weight: 4, opacity: 0.85 }).addTo(routeLayerGroup);
+            lastPoint = b;
         }
 
     }
