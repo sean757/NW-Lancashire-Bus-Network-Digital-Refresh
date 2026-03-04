@@ -872,14 +872,19 @@ function clearRouteLayers() {
 
 // Cache for OSRM route responses keyed by "lat,lon|lat,lon"
 const osrmCache = {};
-async function routeAlongRoad(a, b) {
+async function routeAlongRoad(a, b, routeType = 'driving') {
+    console.log("Creating route with type " + routeType);
     // a and b are [lat, lon]
     if (!a || !b) return null;
     const key = `${a[0]},${a[1]}|${b[0]},${b[1]}`;
-    if (osrmCache[key]) return osrmCache[key];
+    if (osrmCache[key]) {
+        console.log("Using cached route for key " + key);
+        return osrmCache[key];
+    };
     try {
-        const url = `https://router.project-osrm.org/route/v1/driving/${a[1]},${a[0]};${b[1]},${b[0]}?overview=full&geometries=geojson&alternatives=false`;
+        const url = `https://router.project-osrm.org/route/v1/${routeType}/${a[1]},${a[0]};${b[1]},${b[0]}?overview=full&geometries=geojson&alternatives=false`;
         const res = await fetch(url);
+        console.log(res);
         if (!res.ok) return null;
         const body = await res.json();
         if (body && body.routes && body.routes.length) {
@@ -965,7 +970,8 @@ async function drawJourneyOnMap(journey) {
             }
             if (lastPoint && nextBusCoords) {
                 try {
-                    const routed = await routeAlongRoad(lastPoint, nextBusCoords);
+                    console.log(`Routing walking leg from ${lastPoint} to ${nextBusCoords}`);
+                    const routed = await routeAlongRoad(lastPoint, nextBusCoords, 'walking');
                     if (routed && routed.length) {
                         L.polyline(routed, { color: '#3E8EDE', weight: 3, opacity: 0.8, dashArray: '8,6' }).addTo(routeLayerGroup);
                     } else {
@@ -1246,7 +1252,7 @@ planRouteBtn.addEventListener('click', async () => {
             throw new Error(`Server returned ${res.status}: ${txt}`);
         }
         const data = await res.json();
-        console.log('Journey response received:', JSON.stringify(data, null, 2));
+        // DEBUG console.log('Journey response received:', JSON.stringify(data, null, 2));
         // data.journeys is an array
         renderJourneyList(data.journeys || []);
         // Auto-collapse planner
