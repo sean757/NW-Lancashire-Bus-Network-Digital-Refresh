@@ -678,6 +678,7 @@ const translations = {
         bus: 'Bus',
         walk: 'Walk',
         viewOnMap: '🗺️ View on Map',
+        departureTime: 'Departure Time:',
         noJourneys: 'No journeys found for the selected points.',
         selectValidPoints: 'Please select valid start and end points (use the suggestions or click a suggestion).',
         planningRoute: 'Planning route…',
@@ -711,6 +712,7 @@ const translations = {
         bus: '公交',
         walk: '步行',
         viewOnMap: '🗺️ 在地图上查看',
+        departureTime: '出发时间：',
         noJourneys: '未找到符合所选起点和终点的路线。',
         selectValidPoints: '请选择有效的起点和终点（请使用建议列表或点击建议项）。',
         planningRoute: '正在规划路线…',
@@ -736,6 +738,7 @@ function applyTranslations(lang) {
     document.querySelector('label[for="pathfinding"]').textContent = t.pathfinding;
     document.querySelector('#pathfinding option[value="fastest"]').textContent = t.fastest;
     document.querySelector('#pathfinding option[value="least-changes"]').textContent = t.leastChanges;
+    document.querySelector('label[for="departureTime"]').textContent = t.departureTime;
     document.querySelector('label[for="walkingSpeed"]').textContent = t.walkingSpeed;
     document.querySelector('#walkingSpeed option[value="slow"]').textContent = t.slow;
     document.querySelector('#walkingSpeed option[value="medium"]').textContent = t.medium;
@@ -1182,6 +1185,7 @@ planRouteBtn.addEventListener('click', async () => {
     const t = translations[currentLang] || translations.en;
     const pathfinding = document.getElementById('pathfinding').value;
     const walkingSpeed = document.getElementById('walkingSpeed').value;
+    const departureTimeInput = document.getElementById('departureTime').value;
 
     // Ensure typed inputs are resolved to stops if possible
     await ensureSelectedFromInput(true);
@@ -1219,6 +1223,9 @@ planRouteBtn.addEventListener('click', async () => {
     // Add optional params (not presently used by backend but kept for future)
     body.preference = pathfinding;
     body.walking_speed = walkingSpeed;
+    if (departureTimeInput) {
+        body.departure_time = departureTimeInput;
+    }
 
     // Basic validation
     if ((!body.origin_stop_id && (body.origin_lat == null || body.origin_lon == null)) || (!body.destination_stop_id && (body.destination_lat == null || body.destination_lon == null))) {
