@@ -4,6 +4,7 @@ Refreshes every hour.
 """
 
 import asyncio
+import re
 from sqlalchemy import text
 from app.database import async_session
 
@@ -18,6 +19,8 @@ class RouteCache:
         self.stop_routes = {}
         # stop_id -> (latitude, longitude)
         self.stop_coords = {}
+        # stop_id -> stop_name
+        self.stop_names = {}
         self._loaded = False
 
     async def load(self):
@@ -51,14 +54,16 @@ class RouteCache:
                     self.stop_routes[sid] = []
                 self.stop_routes[sid].append((rid, seq, direction))
 
-            # Load stop coordinates for nearby lookups
+            # Load stop coordinates and names for nearby lookups
             result = await db.execute(text(
-                "SELECT stop_id, latitude, longitude FROM stops WHERE active = TRUE"
+                "SELECT stop_id, latitude, longitude, stop_name FROM stops WHERE active = TRUE"
             ))
             self.stop_coords = {}
+            self.stop_names = {}
             for row in result.mappings():
                 self.stop_coords[row["stop_id"]] = (
                     row["latitude"], row["longitude"])
+                self.stop_names[row["stop_id"]] = row["stop_name"]
 
         self._loaded = True
         print(
@@ -172,6 +177,54 @@ class RouteCache:
                     return transfers
 
         return transfers
+
+    @staticmethod
+    def _get_base_name(name: str) -> str:
+        """Strip a trailing letter/number suffix to get the base stop name.
+
+        Handles cases like:
+          'Common Garden Street A' -> 'Common Garden Street'
+          'Market Street (Stop B)' -> 'Market Street'
+          'Bus Station 1'          -> 'Bus Station'
+        Falls back to the original name if stripping would leave an empty string.
+        """
+        # Remove trailing parenthetical suffix, e.g. ' (Stop A)' or ' (adj School)'
+        cleaned = re.sub(r'\s*\([^)]*\)\s*$', '', name).strip()
+        # Remove trailing single uppercase letter or digit (NaPTAN convention, e.g. ' A', ' B', ' 1')
+        trimmed = re.sub(r'\s+[A-Z0-9]$', '', cleaned).strip()
+        return trimmed if trimmed else name
+
+    def find_similar_stops(self, stop_id: str, radius_km: float = 0.2) -> list:
+        """Return stop IDs within *radius_km* that share the same base name as *stop_id*.
+
+        This is used to handle duplicate stops such as 'Common Garden Street A',
+        'Common Garden Street B', and 'Common Garden Street C', which represent
+        physically adjacent stops for the same location.  Including all of them
+        during journey planning ensures that routes only serving stop B or C are
+        not missed when the user has selected stop A.
+
+        The original *stop_id* is always the first element of the returned list.
+        """
+        coords = self.stop_coords.get(stop_id)
+        name = self.stop_names.get(stop_id)
+        if not coords or not name:
+            return [stop_id]
+
+        base = self._get_base_name(name)
+        similar = [stop_id]
+
+        for other_id, other_coords in self.stop_coords.items():
+            if other_id == stop_id:
+                continue
+            dist = self._haversine(
+                coords[0], coords[1], other_coords[0], other_coords[1])
+            if dist > radius_km:
+                continue
+            other_name = self.stop_names.get(other_id, '')
+            if self._get_base_name(other_name) == base:
+                similar.append(other_id)
+
+        return similar
 
     @staticmethod
     def _haversine(lat1, lon1, lat2, lon2):
