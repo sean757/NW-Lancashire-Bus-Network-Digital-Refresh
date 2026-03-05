@@ -140,6 +140,13 @@ let map = null;
 let startMarker = null;
 let endMarker = null;
 
+// Bus stop markers layer
+let busStopLayerGroup = null;
+// Zoom level at which bus stop icons become visible
+const BUS_STOP_ZOOM_THRESHOLD = 14;
+// Debounce timer for updateBusStopMarkers
+let busStopUpdateTimer = null;
+
 // DOM selectors
 let fromInput = document.getElementById('startPoint');
 let toInput = document.getElementById('endPoint');
@@ -543,7 +550,141 @@ function initializeLeafletMap() {
         pendingEndItem = null;
     }
 
-    // Note: Map click handling for markers will be implemented in a future update
+    // Zoom hint control – tells the user to zoom in to see/select bus stops
+    const zoomHint = L.control({ position: 'bottomleft' });
+    zoomHint.onAdd = function () {
+        const div = L.DomUtil.create('div', 'bus-stop-zoom-hint');
+        div.setAttribute('aria-live', 'polite');
+        div.textContent = '🔍 Zoom in to see and select bus stops on the map';
+        return div;
+    };
+    zoomHint.addTo(map);
+
+    function updateZoomHint() {
+        const hint = document.querySelector('.bus-stop-zoom-hint');
+        if (!hint) return;
+        if (map.getZoom() >= BUS_STOP_ZOOM_THRESHOLD) {
+            hint.style.display = 'none';
+        } else {
+            hint.style.display = 'block';
+        }
+    }
+
+    // Load/refresh bus stop markers whenever the view changes (debounced)
+    map.on('zoomend moveend', () => {
+        updateZoomHint();
+        if (busStopUpdateTimer) clearTimeout(busStopUpdateTimer);
+        busStopUpdateTimer = setTimeout(() => {
+            busStopUpdateTimer = null;
+            updateBusStopMarkers();
+        }, 300);
+    });
+    updateZoomHint();
+}
+
+/**
+ * Fetch bus stops within the current map bounds and render them as
+ * clickable Leaflet markers.  Only active when zoom >= BUS_STOP_ZOOM_THRESHOLD.
+ */
+async function updateBusStopMarkers() {
+    if (!map) return;
+
+    // Below threshold – remove any existing stop markers and bail out
+    if (map.getZoom() < BUS_STOP_ZOOM_THRESHOLD) {
+        if (busStopLayerGroup) {
+            busStopLayerGroup.clearLayers();
+        }
+        return;
+    }
+
+    const bounds = map.getBounds();
+    const params = new URLSearchParams({
+        min_lat: bounds.getSouth(),
+        max_lat: bounds.getNorth(),
+        min_lon: bounds.getWest(),
+        max_lon: bounds.getEast(),
+        limit: 200,
+    });
+
+    let stops = [];
+    try {
+        const res = await fetch(`${apiUrl}/stops/bounds?${params}`);
+        if (res.ok) {
+            stops = await res.json();
+        }
+    } catch (err) {
+        console.error('Failed to fetch bus stops for map view:', err);
+        return;
+    }
+
+    // Initialise the layer group once
+    if (!busStopLayerGroup) {
+        busStopLayerGroup = L.layerGroup().addTo(map);
+    } else {
+        busStopLayerGroup.clearLayers();
+    }
+
+    stops.forEach((stop) => {
+        const lat = parseFloat(stop.latitude);
+        const lon = parseFloat(stop.longitude);
+        if (isNaN(lat) || isNaN(lon)) return;
+
+        // Custom bus-stop icon (DivIcon so it works without external images)
+        const icon = L.divIcon({
+            className: 'bus-stop-icon',
+            html: '<span aria-hidden="true">🚏</span>',
+            iconSize: [24, 24],
+            iconAnchor: [12, 12],
+            popupAnchor: [0, -14],
+        });
+
+        const label = stop.stop_name + (stop.locality ? ` (${stop.locality})` : '');
+        const marker = L.marker([lat, lon], {
+            icon,
+            title: label,
+            alt: `Bus stop: ${label}`,
+        });
+
+        // Build popup with "Set as Start" / "Set as End" buttons
+        const popupEl = document.createElement('div');
+        popupEl.className = 'bus-stop-popup';
+
+        const nameEl = document.createElement('strong');
+        nameEl.textContent = label;
+        popupEl.appendChild(nameEl);
+
+        const btnGroup = document.createElement('div');
+        btnGroup.className = 'bus-stop-popup-btns';
+
+        const setStartBtn = document.createElement('button');
+        setStartBtn.className = 'bus-stop-popup-btn bus-stop-popup-btn--start';
+        setStartBtn.setAttribute('aria-label', `Set ${label} as start point`);
+        setStartBtn.textContent = '📍 Set as Start';
+        setStartBtn.addEventListener('click', () => {
+            fromInput.value = label;
+            addStartMarker(stop);
+            marker.closePopup();
+            showNotification(`Start point set to: ${label}`);
+        });
+
+        const setEndBtn = document.createElement('button');
+        setEndBtn.className = 'bus-stop-popup-btn bus-stop-popup-btn--end';
+        setEndBtn.setAttribute('aria-label', `Set ${label} as end point`);
+        setEndBtn.textContent = '🏁 Set as End';
+        setEndBtn.addEventListener('click', () => {
+            toInput.value = label;
+            addEndMarker(stop);
+            marker.closePopup();
+            showNotification(`End point set to: ${label}`);
+        });
+
+        btnGroup.appendChild(setStartBtn);
+        btnGroup.appendChild(setEndBtn);
+        popupEl.appendChild(btnGroup);
+
+        marker.bindPopup(popupEl, { maxWidth: 220 });
+        busStopLayerGroup.addLayer(marker);
+    });
 }
 
 

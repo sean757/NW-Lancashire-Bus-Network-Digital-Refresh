@@ -118,6 +118,34 @@ async def nearby_stops(
     return [dict(row) for row in rows]
 
 
+@router.get("/bounds")
+async def stops_in_bounds(
+    min_lat: float = Query(..., description="Minimum latitude"),
+    max_lat: float = Query(..., description="Maximum latitude"),
+    min_lon: float = Query(..., description="Minimum longitude"),
+    max_lon: float = Query(..., description="Maximum longitude"),
+    limit: int = Query(default=200, le=500),
+    db: AsyncSession = Depends(get_db),
+):
+    """Find all active stops within a geographic bounding box."""
+    query = """
+        SELECT stop_id, stop_name, locality, latitude, longitude, stop_type
+        FROM stops
+        WHERE active = TRUE
+          AND latitude  BETWEEN :min_lat AND :max_lat
+          AND longitude BETWEEN :min_lon AND :max_lon
+        ORDER BY stop_name
+        LIMIT :limit
+    """
+    result = await db.execute(text(query), {
+        "min_lat": min_lat, "max_lat": max_lat,
+        "min_lon": min_lon, "max_lon": max_lon,
+        "limit": limit,
+    })
+    rows = result.mappings().all()
+    return [dict(row) for row in rows]
+
+
 @router.get("/{stop_id}")
 async def get_stop(stop_id: str, db: AsyncSession = Depends(get_db)):
     """Get a single stop by its ID (ATCOCode)."""
