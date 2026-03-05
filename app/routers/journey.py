@@ -159,127 +159,158 @@ async def plan_journey(req: JourneyRequest, db: AsyncSession = Depends(get_db)):
     dest_name = (dest_name_result.scalar() or destination)
 
     journeys = []
+    # Track seen journey signatures to avoid duplicates when the same trip is
+    # reachable from more than one similar stop (e.g. Stop A and Stop B on the
+    # same route/trip with identical times).
+    seen_journey_keys: set = set()
+
+    def add_journey(journey: dict) -> None:
+        """Add a journey only if it hasn't been seen before."""
+        last = [l for l in journey["legs"] if l.get("mode", "bus") == "bus"][-1]
+        key = (
+            journey["legs"][0].get("route_id", ""),
+            journey["legs"][0].get("departure_time", ""),
+            last.get("arrival_time", ""),
+            last.get("destination_stop_id", ""),
+        )
+        if key not in seen_journey_keys:
+            seen_journey_keys.add(key)
+            journeys.append(journey)
+
+    # Expand origin and destination to nearby stops with the same base name
+    # (e.g. 'Common Garden Street A', 'B', 'C' are all within ~200 m and
+    #  represent physically adjacent stops for the same location).
+    origin_candidates = route_cache.find_similar_stops(origin)
+    destination_candidates = route_cache.find_similar_stops(destination)
 
     # ==========================================
     # 1. Try direct routes
     # ==========================================
-    direct_routes = route_cache.get_common_routes(origin, destination)
+    for orig_cand in origin_candidates:
+        orig_cand_name = route_cache.stop_names.get(orig_cand, orig_cand)
+        for dest_cand in destination_candidates:
+            if orig_cand == dest_cand:
+                continue
+            dest_cand_name = route_cache.stop_names.get(dest_cand, dest_cand)
+            direct_routes = route_cache.get_common_routes(orig_cand, dest_cand)
 
-    for route in direct_routes:
-        timetabled = await get_timetabled_journeys(
-            route["route_id"],
-            route["direction"],
-            origin,
-            destination,
-            dep_time,
-            dep_date,
-            db,
-        )
+            for route in direct_routes:
+                timetabled = await get_timetabled_journeys(
+                    route["route_id"],
+                    route["direction"],
+                    orig_cand,
+                    dest_cand,
+                    dep_time,
+                    dep_date,
+                    db,
+                )
 
-        for trip in timetabled:
-            journeys.append({
-                "type": "direct",
-                "legs": [
-                    {
-                        "route_id": route["route_id"],
-                        "route_name": route["route_name"],
-                        "operator": route["operator"],
-                        "direction": route["direction"],
-                        "origin_stop_id": origin,
-                        "origin_stop_name": origin_name,
-                        "destination_stop_id": destination,
-                        "destination_stop_name": dest_name,
-                        "departure_time": str(trip["origin_departure"]),
-                        "arrival_time": str(trip["destination_arrival"]),
-                    }
-                ],
-            })
+                for trip in timetabled:
+                    add_journey({
+                        "type": "direct",
+                        "legs": [
+                            {
+                                "route_id": route["route_id"],
+                                "route_name": route["route_name"],
+                                "operator": route["operator"],
+                                "direction": route["direction"],
+                                "origin_stop_id": orig_cand,
+                                "origin_stop_name": orig_cand_name,
+                                "destination_stop_id": dest_cand,
+                                "destination_stop_name": dest_cand_name,
+                                "departure_time": str(trip["origin_departure"]),
+                                "arrival_time": str(trip["destination_arrival"]),
+                            }
+                        ],
+                    })
 
     # ==========================================
     # 2. Try single-transfer routes if no direct
     # ==========================================
     if not journeys:
-        transfer_options = route_cache.find_transfer_routes(
-            origin, destination)
+        for orig_cand in origin_candidates:
+            orig_cand_name = route_cache.stop_names.get(orig_cand, orig_cand)
+            for dest_cand in destination_candidates:
+                if orig_cand == dest_cand:
+                    continue
+                dest_cand_name = route_cache.stop_names.get(dest_cand, dest_cand)
+                transfer_options = route_cache.find_transfer_routes(
+                    orig_cand, dest_cand)
 
-        for transfer in transfer_options[:10]:  # Limit results
-            # Get timetable for leg 1
-            leg1_trips = await get_timetabled_journeys(
-                transfer["leg1_route_id"],
-                transfer["leg1_direction"],
-                origin,
-                transfer["leg1_alight_stop"],
-                dep_time,
-                dep_date,
-                db,
-                limit=3,
-            )
+                for transfer in transfer_options[:10]:  # Limit results
+                    # Get timetable for leg 1
+                    leg1_trips = await get_timetabled_journeys(
+                        transfer["leg1_route_id"],
+                        transfer["leg1_direction"],
+                        orig_cand,
+                        transfer["leg1_alight_stop"],
+                        dep_time,
+                        dep_date,
+                        db,
+                        limit=3,
+                    )
 
-            for leg1 in leg1_trips:
-                # Use leg1 arrival to find leg2 departures
-                leg1_arrival = leg1["destination_arrival"]
+                    for leg1 in leg1_trips:
+                        # Use leg1 arrival to find leg2 departures
+                        leg1_arrival = leg1["destination_arrival"]
 
-                leg2_trips = await get_timetabled_journeys(
-                    transfer["leg2_route_id"],
-                    transfer["leg2_direction"],
-                    transfer["transfer_stop"],
-                    destination,
-                    leg1_arrival,
-                    dep_date,
-                    db,
-                    limit=2,
-                )
+                        leg2_trips = await get_timetabled_journeys(
+                            transfer["leg2_route_id"],
+                            transfer["leg2_direction"],
+                            transfer["transfer_stop"],
+                            dest_cand,
+                            leg1_arrival,
+                            dep_date,
+                            db,
+                            limit=2,
+                        )
 
-                # Get transfer stop names
-                alight_name_result = await db.execute(
-                    text("SELECT stop_name FROM stops WHERE stop_id = :sid"),
-                    {"sid": transfer["leg1_alight_stop"]}
-                )
-                board_name_result = await db.execute(
-                    text("SELECT stop_name FROM stops WHERE stop_id = :sid"),
-                    {"sid": transfer["transfer_stop"]}
-                )
-                alight_name = (alight_name_result.scalar()
-                               or transfer["leg1_alight_stop"])
-                board_name = (board_name_result.scalar()
-                              or transfer["transfer_stop"])
+                        # Resolve transfer stop names from cache (avoids N+1 DB queries)
+                        alight_name = route_cache.stop_names.get(
+                            transfer["leg1_alight_stop"],
+                            transfer["leg1_alight_stop"],
+                        )
+                        board_name = route_cache.stop_names.get(
+                            transfer["transfer_stop"],
+                            transfer["transfer_stop"],
+                        )
 
-                for leg2 in leg2_trips:
-                    journeys.append({
-                        "type": "transfer",
-                        "legs": [
-                            {
-                                "mode": "bus",
-                                "route_id": transfer["leg1_route_id"],
-                                "route_name": transfer["leg1_route_name"],
-                                "direction": transfer["leg1_direction"],
-                                "origin_stop_id": origin,
-                                "origin_stop_name": origin_name,
-                                "destination_stop_id": transfer["leg1_alight_stop"],
-                                "destination_stop_name": alight_name,
-                                "departure_time": str(leg1["origin_departure"]),
-                                "arrival_time": str(leg1["destination_arrival"]),
-                            },
-                            {
-                                "mode": "walk",
-                                "distance_km": transfer["walk_distance_km"],
-                                "from_stop": alight_name,
-                                "to_stop": board_name,
-                            },
-                            {
-                                "mode": "bus",
-                                "route_id": transfer["leg2_route_id"],
-                                "route_name": transfer["leg2_route_name"],
-                                "direction": transfer["leg2_direction"],
-                                "origin_stop_id": transfer["transfer_stop"],
-                                "origin_stop_name": board_name,
-                                "destination_stop_id": destination,
-                                "destination_stop_name": dest_name,
-                                "departure_time": str(leg2["origin_departure"]),
-                                "arrival_time": str(leg2["destination_arrival"]),
-                            },
-                        ],
-                    })
+                        for leg2 in leg2_trips:
+                            add_journey({
+                                "type": "transfer",
+                                "legs": [
+                                    {
+                                        "mode": "bus",
+                                        "route_id": transfer["leg1_route_id"],
+                                        "route_name": transfer["leg1_route_name"],
+                                        "direction": transfer["leg1_direction"],
+                                        "origin_stop_id": orig_cand,
+                                        "origin_stop_name": orig_cand_name,
+                                        "destination_stop_id": transfer["leg1_alight_stop"],
+                                        "destination_stop_name": alight_name,
+                                        "departure_time": str(leg1["origin_departure"]),
+                                        "arrival_time": str(leg1["destination_arrival"]),
+                                    },
+                                    {
+                                        "mode": "walk",
+                                        "distance_km": transfer["walk_distance_km"],
+                                        "from_stop": alight_name,
+                                        "to_stop": board_name,
+                                    },
+                                    {
+                                        "mode": "bus",
+                                        "route_id": transfer["leg2_route_id"],
+                                        "route_name": transfer["leg2_route_name"],
+                                        "direction": transfer["leg2_direction"],
+                                        "origin_stop_id": transfer["transfer_stop"],
+                                        "origin_stop_name": board_name,
+                                        "destination_stop_id": dest_cand,
+                                        "destination_stop_name": dest_cand_name,
+                                        "departure_time": str(leg2["origin_departure"]),
+                                        "arrival_time": str(leg2["destination_arrival"]),
+                                    },
+                                ],
+                            })
 
     # Sort by earliest arrival
     def get_arrival(j):
