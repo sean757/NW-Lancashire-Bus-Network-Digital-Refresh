@@ -632,10 +632,13 @@ async function updateBusStopMarkers() {
         // Custom bus-stop icon (DivIcon so it works without external images)
         const icon = L.divIcon({
             className: 'bus-stop-icon',
-            html: '<span aria-hidden="true">🚏</span>',
-            iconSize: [24, 24],
-            iconAnchor: [12, 12],
-            popupAnchor: [0, -14],
+            html: `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" role="img" aria-label="Bus stop">
+                <circle cx="16" cy="16" r="15" fill="#2E5090" stroke="white" stroke-width="2.5"/>
+                <text x="16" y="21" font-family="Arial,sans-serif" font-size="15" font-weight="bold" fill="white" text-anchor="middle">B</text>
+            </svg>`,
+            iconSize: [32, 32],
+            iconAnchor: [16, 16],
+            popupAnchor: [0, -18],
         });
 
         const label = stop.stop_name + (stop.locality ? ` (${stop.locality})` : '');

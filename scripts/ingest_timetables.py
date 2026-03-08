@@ -180,11 +180,11 @@ def parse_txc_xml(conn, xml_content, operator_code):
             cumulative_secs = base_hour * 3600 + base_min * 60 + base_sec
 
             for stop_ref, seq, run_time in sections[section_id]:
+                # Accumulate the travel time to reach this stop first,
+                # so arrival_secs reflects when the bus arrives here.
+                cumulative_secs += run_time
                 arrival_secs = cumulative_secs
                 departure_secs = cumulative_secs
-
-                # Always accumulate time even if we skip the stop
-                cumulative_secs += run_time
 
                 # Skip stops not in our database
                 if stop_ref not in valid_stops:
