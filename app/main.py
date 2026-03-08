@@ -7,7 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.database import init_db, close_db
-from app.routers import stops, disruptions, journey
+from app.routers import stops, disruptions, journey, routes
 from app.services.route_cache import route_cache
 import httpx
 
@@ -79,3 +79,4 @@ app.include_router(stops.router, prefix="/api/v1/stops", tags=["Stops"])
 app.include_router(disruptions.router,
                    prefix="/api/v1/disruptions", tags=["Disruptions"])
 app.include_router(journey.router, prefix="/api/v1/journey", tags=["Journey"])
+app.include_router(routes.router, prefix="/api/v1/routes", tags=["Routes"])

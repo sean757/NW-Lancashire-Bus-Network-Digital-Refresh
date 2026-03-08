@@ -120,6 +120,26 @@ CREATE INDEX IF NOT EXISTS idx_disruptions_route ON disruptions(route_id);
 CREATE INDEX IF NOT EXISTS idx_disruptions_type ON disruptions(disruption_type);
 
 -- ============================================
+-- ROUTE WAYPOINTS (ordered geometry for each route direction)
+-- ============================================
+-- Waypoints are stored in traversal order (sequence 0, 1, 2, …).
+-- stop_id is non-NULL for points that coincide with a bus stop, NULL for
+-- intermediate road-following track points sourced from TransXChange Track data.
+CREATE TABLE IF NOT EXISTS route_waypoints (
+    id              SERIAL PRIMARY KEY,
+    route_id        VARCHAR(50) NOT NULL REFERENCES routes(route_id) ON DELETE CASCADE,
+    direction       VARCHAR(10) DEFAULT 'outbound',
+    sequence        INTEGER NOT NULL,
+    latitude        DOUBLE PRECISION NOT NULL,
+    longitude       DOUBLE PRECISION NOT NULL,
+    stop_id         VARCHAR(20) REFERENCES stops(stop_id),
+    UNIQUE(route_id, direction, sequence)
+);
+
+CREATE INDEX IF NOT EXISTS idx_route_waypoints_route ON route_waypoints(route_id, direction);
+CREATE INDEX IF NOT EXISTS idx_route_waypoints_stop  ON route_waypoints(stop_id) WHERE stop_id IS NOT NULL;
+
+-- ============================================
 -- DELAY STATISTICS (aggregated for analysis)
 -- ============================================
 CREATE TABLE IF NOT EXISTS delay_statistics (
