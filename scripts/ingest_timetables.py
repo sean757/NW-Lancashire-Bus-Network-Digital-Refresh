@@ -169,6 +169,15 @@ def parse_txc_xml(conn, xml_content, operator_code):
             if section_id not in sections:
                 continue
 
+            # Skip journeys where all timing links have zero run time (e.g. PT0M0S),
+            # which indicates missing or invalid timing data in the TXC XML file.
+            # A valid multi-stop journey must have at least one non-zero run time.
+            section_stops = sections[section_id]
+            total_run_time = sum(run_time for _, _, run_time in section_stops)
+            if total_run_time == 0 and len(section_stops) > 1:
+                print(f"      Skipping journey {vj_code or jp_ref}: all timing links have zero run time (PT0M0S)")
+                continue
+
             # Parse days of week
             days_elem = vj.find('.//txc:DaysOfWeek', namespaces=NS)
             days_bitmask = days_to_bitmask(days_elem)
