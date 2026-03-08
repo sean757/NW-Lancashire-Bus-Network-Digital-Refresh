@@ -154,6 +154,12 @@ def parse_txc_xml(conn, xml_content, operator_code):
                     """, (route_id, stop_ref, seq, direction))
                     route_stops_inserted.add(key)
 
+        # Default placeholder run time (seconds) used when a timing link
+        # carries no duration (PT0M0S / 0s).  1 minute per link gives each
+        # stop a distinct, incrementing time so that the journey planner can
+        # distinguish origin departure from destination arrival.
+        PLACEHOLDER_RUN_TIME_SECS = 60
+
         # 6. Parse VehicleJourneys and insert into timetables
         journey_count = 0
         for vj in root.findall('.//txc:VehicleJourney', namespaces=NS):
@@ -169,15 +175,6 @@ def parse_txc_xml(conn, xml_content, operator_code):
             if section_id not in sections:
                 continue
 
-            # Skip journeys where all timing links have zero run time (e.g. PT0M0S),
-            # which indicates missing or invalid timing data in the TXC XML file.
-            # A valid multi-stop journey must have at least one non-zero run time.
-            section_stops = sections[section_id]
-            total_run_time = sum(run_time for _, _, run_time in section_stops)
-            if total_run_time == 0 and len(section_stops) > 1:
-                print(f"      Skipping journey {vj_code or jp_ref}: all timing links have zero run time (PT0M0S)")
-                continue
-
             # Parse days of week
             days_elem = vj.find('.//txc:DaysOfWeek', namespaces=NS)
             days_bitmask = days_to_bitmask(days_elem)
@@ -188,10 +185,14 @@ def parse_txc_xml(conn, xml_content, operator_code):
                 dep_parts[1]), int(dep_parts[2]) if len(dep_parts) > 2 else 0
             cumulative_secs = base_hour * 3600 + base_min * 60 + base_sec
 
-            for stop_ref, seq, run_time in sections[section_id]:
+            for i, (stop_ref, seq, run_time) in enumerate(sections[section_id]):
+                # The first stop legitimately has zero travel time (it is the
+                # origin).  For every subsequent stop, substitute the placeholder
+                # when the source data provides no run time.
+                effective_run_time = run_time if (i == 0 or run_time > 0) else PLACEHOLDER_RUN_TIME_SECS
                 # Accumulate the travel time to reach this stop first,
                 # so arrival_secs reflects when the bus arrives here.
-                cumulative_secs += run_time
+                cumulative_secs += effective_run_time
                 arrival_secs = cumulative_secs
                 departure_secs = cumulative_secs
 
