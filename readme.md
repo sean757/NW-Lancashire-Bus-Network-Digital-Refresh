@@ -102,11 +102,11 @@ and place the GTFS ZIP and an OpenStreetMap extract in the same directory.
 
 ```bash
 # Download OTP (replace X.Y.Z with the latest version)
-wget https://github.com/opentripplanner/OpenTripPlanner/releases/download/vX.Y.Z/otp-X.Y.Z-shaded.jar
+wget https://github.com/opentripplanner/OpenTripPlanner/releases/download/v2.8.1/otp-shaded-2.8.1.jar
 
 # Download an OSM extract for NW Lancashire/Lancashire
 # (e.g. from https://download.geofabrik.de/europe/great-britain/england/lancashire.html)
-wget https://download.geofabrik.de/europe/great-britain/england/lancashire-latest.osm.pbf
+wget https://download.geofabrik.de/europe/united-kingdom/england/lancashire-latest.osm.pbf
 
 # Create OTP data directory
 mkdir -p otp-data
