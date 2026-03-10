@@ -114,13 +114,13 @@ cp gtfs_export.zip otp-data/
 cp lancashire-latest.osm.pbf otp-data/
 
 # Build the OTP graph (takes a few minutes)
-java -Xmx4G -jar otp-X.Y.Z-shaded.jar --build --save otp-data
+java -Xmx4G -jar otp-shaded-2.8.1.jar --build --save otp-data
 
 # Start OTP server (default port 8080)
 # IMPORTANT: OTP uses port 8080 by default — the API backend uses the same
 # port in development.  Run OTP on a different port (e.g. 9090) and update
 # the OTP_URL environment variable accordingly.
-java -Xmx4G -jar otp-X.Y.Z-shaded.jar --load otp-data --port 9090
+java -Xmx4G -jar otp-shaded-2.8.1.jar --load otp-data --port 9090
 ```
 
 Set the OTP URL before starting the API server:
