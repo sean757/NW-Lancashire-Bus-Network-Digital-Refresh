@@ -1,5 +1,6 @@
 import requests
 import psycopg2
+from psycopg2.extras import execute_values
 import zipfile
 import io
 from lxml import etree
@@ -105,8 +106,16 @@ def _build_waypoints_from_stops(stop_sequence, stop_coords):
     return waypoints
 
 
-def parse_txc_xml(conn, xml_content, operator_code):
-    """Parse TransXChange XML and insert into routes, route_stops, timetables, and route_waypoints."""
+def parse_txc_xml(conn, xml_content, operator_code, valid_stops, stop_coords):
+    """Parse TransXChange XML and insert into routes, route_stops, timetables, and route_waypoints.
+
+    Args:
+        conn: psycopg2 connection (must already be open).
+        xml_content: raw bytes of the TransXChange XML file.
+        operator_code: e.g. "ARCT".
+        valid_stops: set of stop_id strings known to be in the stops table.
+        stop_coords: dict mapping stop_id -> (latitude, longitude).
+    """
     try:
         root = etree.fromstring(xml_content)
     except Exception as e:
@@ -205,11 +214,7 @@ def parse_txc_xml(conn, xml_content, operator_code):
     route_id = service_code
 
     with conn.cursor() as cur:
-        # Load valid stop IDs from our database
-        cur.execute("SELECT stop_id FROM stops")
-        valid_stops = {row[0] for row in cur.fetchall()}
-
-        # 4. Insert into routes table
+        # 4. Insert into routes table (single row, upsert as before)
         cur.execute("""
             INSERT INTO routes (route_id, route_name, operator, description, route_type)
             VALUES (%s, %s, %s, %s, %s)
@@ -219,8 +224,9 @@ def parse_txc_xml(conn, xml_content, operator_code):
                 description = EXCLUDED.description;
         """, (route_id, line_name, operator_code, description, mode))
 
-        # 5. Insert into route_stops for each journey pattern
-        route_stops_inserted = set()
+        # 5. Collect route_stops rows, then batch-insert
+        route_stops_seen = set()
+        route_stops_batch = []
         for jp_id, (section_id, direction) in patterns.items():
             if section_id not in sections:
                 continue
@@ -228,23 +234,21 @@ def parse_txc_xml(conn, xml_content, operator_code):
                 if stop_ref not in valid_stops:
                     continue
                 key = (route_id, stop_ref, direction, seq)
-                if key not in route_stops_inserted:
-                    cur.execute("""
-                        INSERT INTO route_stops (route_id, stop_id, stop_sequence, direction)
-                        VALUES (%s, %s, %s, %s)
-                        ON CONFLICT (route_id, stop_id, direction, stop_sequence) DO NOTHING;
-                    """, (route_id, stop_ref, seq, direction))
-                    route_stops_inserted.add(key)
+                if key not in route_stops_seen:
+                    route_stops_batch.append((route_id, stop_ref, seq, direction))
+                    route_stops_seen.add(key)
 
-        # 5b. Insert route_waypoints for each (route_id, direction).
-        # Only insert once per direction; skip if already done by a previous JP.
-        cur.execute(
-            "SELECT stop_id, latitude, longitude FROM stops WHERE stop_id = ANY(%s)",
-            (list(valid_stops),)
-        )
-        stop_coords = {row[0]: (row[1], row[2]) for row in cur.fetchall()}
+        if route_stops_batch:
+            execute_values(cur, """
+                INSERT INTO route_stops (route_id, stop_id, stop_sequence, direction)
+                VALUES %s
+                ON CONFLICT (route_id, stop_id, direction, stop_sequence) DO NOTHING
+            """, route_stops_batch)
 
+        # 5b. Collect route_waypoints rows, then batch-insert.
+        # Only one set of waypoints per (route_id, direction).
         inserted_wp_directions = set()
+        waypoints_batch = []
         for jp_id, (section_id, direction) in patterns.items():
             wp_key = (route_id, direction)
             if wp_key in inserted_wp_directions:
@@ -267,15 +271,18 @@ def parse_txc_xml(conn, xml_content, operator_code):
                 )
 
             for seq_num, (lat, lon, stop_id) in enumerate(waypoints):
-                cur.execute("""
-                    INSERT INTO route_waypoints
-                        (route_id, direction, sequence, latitude, longitude, stop_id)
-                    VALUES (%s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (route_id, direction, sequence) DO NOTHING;
-                """, (route_id, direction, seq_num, lat, lon, stop_id))
+                waypoints_batch.append((route_id, direction, seq_num, lat, lon, stop_id))
 
             if waypoints:
                 inserted_wp_directions.add(wp_key)
+
+        if waypoints_batch:
+            execute_values(cur, """
+                INSERT INTO route_waypoints
+                    (route_id, direction, sequence, latitude, longitude, stop_id)
+                VALUES %s
+                ON CONFLICT (route_id, direction, sequence) DO NOTHING
+            """, waypoints_batch)
 
         # Default placeholder run time (seconds) used when a timing link
         # carries no duration (PT0M0S / 0s).  1 minute per link gives each
@@ -283,8 +290,8 @@ def parse_txc_xml(conn, xml_content, operator_code):
         # distinguish origin departure from destination arrival.
         PLACEHOLDER_RUN_TIME_SECS = 60
 
-        # 6. Parse VehicleJourneys and insert into timetables
-        journey_count = 0
+        # 6. Parse VehicleJourneys, collect all timetable rows, then batch-insert
+        timetables_batch = []
         for vj in root.findall('.//txc:VehicleJourney', namespaces=NS):
             departure_str = vj.findtext('txc:DepartureTime', namespaces=NS)
             jp_ref = vj.findtext('txc:JourneyPatternRef', namespaces=NS)
@@ -317,7 +324,6 @@ def parse_txc_xml(conn, xml_content, operator_code):
                 # so arrival_secs reflects when the bus arrives here.
                 cumulative_secs += effective_run_time
                 arrival_secs = cumulative_secs
-                departure_secs = cumulative_secs
 
                 # Skip stops not in our database
                 if stop_ref not in valid_stops:
@@ -328,16 +334,23 @@ def parse_txc_xml(conn, xml_content, operator_code):
                 arr_m = (arrival_secs % 3600) // 60
                 arr_s = arrival_secs % 60
                 arrival_time = f"{arr_h:02d}:{arr_m:02d}:{arr_s:02d}"
-                departure_time = arrival_time
 
-                cur.execute("""
-                    INSERT INTO timetables (route_id, stop_id, trip_id, arrival_time, departure_time, stop_sequence, direction, days_of_week, valid_from, valid_until)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT DO NOTHING;
-                """, (route_id, stop_ref, vj_code, arrival_time, departure_time, seq, direction, days_bitmask, start_date, end_date))
+                timetables_batch.append((
+                    route_id, stop_ref, vj_code,
+                    arrival_time, arrival_time,
+                    seq, direction, days_bitmask, start_date, end_date,
+                ))
 
-                journey_count += 1
+        if timetables_batch:
+            execute_values(cur, """
+                INSERT INTO timetables
+                    (route_id, stop_id, trip_id, arrival_time, departure_time,
+                     stop_sequence, direction, days_of_week, valid_from, valid_until)
+                VALUES %s
+                ON CONFLICT DO NOTHING
+            """, timetables_batch)
 
+        journey_count = len(timetables_batch)
         if journey_count > 0:
             print(
                 f"      Route {line_name} ({route_id}): {journey_count} timetable entries")
@@ -345,7 +358,7 @@ def parse_txc_xml(conn, xml_content, operator_code):
     conn.commit()
 
 
-def download_and_extract(conn, zip_url, operator_code):
+def download_and_extract(conn, zip_url, operator_code, valid_stops, stop_coords):
     """Download ZIP and process contained XML files."""
     print(f"   Downloading ZIP from: {zip_url}")
     try:
@@ -355,7 +368,7 @@ def download_and_extract(conn, zip_url, operator_code):
             xml_files = [f for f in z.namelist() if f.endswith('.xml')]
             print(f"    Found {len(xml_files)} XML files")
             for filename in xml_files:
-                parse_txc_xml(conn, z.read(filename), operator_code)
+                parse_txc_xml(conn, z.read(filename), operator_code, valid_stops, stop_coords)
     except Exception as e:
         print(f"   Error processing ZIP: {e}")
 
@@ -365,6 +378,15 @@ def run_ingestion():
     try:
         conn = psycopg2.connect(**DB_CONFIG)
         # No table creation — schema managed by init_db.sql
+
+        # Pre-load stop data once for all operators/files to avoid repeated DB queries.
+        print(" Pre-loading stop data from database...")
+        with conn.cursor() as cur:
+            cur.execute("SELECT stop_id FROM stops")
+            valid_stops = {row[0] for row in cur.fetchall()}
+            cur.execute("SELECT stop_id, latitude, longitude FROM stops")
+            stop_coords = {row[0]: (row[1], row[2]) for row in cur.fetchall()}
+        print(f"  Loaded {len(valid_stops)} stops.")
 
         for operator in OPERATORS:
             discovery_url = f"https://transport.scc.lancs.ac.uk/bus/times/{operator}"
@@ -389,7 +411,7 @@ def run_ingestion():
                 ext = item.get('extension')
 
                 if zip_url and ext == "zip":
-                    download_and_extract(conn, zip_url, operator)
+                    download_and_extract(conn, zip_url, operator, valid_stops, stop_coords)
 
         conn.close()
         print("\n All timetable data processed successfully!")
