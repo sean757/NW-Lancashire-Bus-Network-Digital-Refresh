@@ -1014,8 +1014,46 @@ function clearRouteLayers() {
     }
 }
 
-// OpenRouteService API key – replace with your key from https://openrouteservice.org/
-// Note: as this is client-side code the key will be visible in the browser source.
+// Cache for route waypoints responses keyed by "route_id|direction|from_stop|to_stop"
+const waypointsCache = {};
+
+/**
+ * Fetch ordered waypoints for a bus route leg from the backend.
+ * Returns an array of [lat, lon] pairs, or null if unavailable.
+ *
+ * @param {string} routeId   - The route_id from the journey leg.
+ * @param {string} direction - The direction ('outbound' or 'inbound').
+ * @param {string} fromStop  - Origin stop_id of the leg.
+ * @param {string} toStop    - Destination stop_id of the leg.
+ */
+async function fetchRouteWaypoints(routeId, direction, fromStop, toStop) {
+    if (!routeId) return null;
+    const cacheKey = `${routeId}|${direction || 'outbound'}|${fromStop || ''}|${toStop || ''}`;
+    if (waypointsCache[cacheKey] !== undefined) return waypointsCache[cacheKey];
+
+    try {
+        let url = `${apiUrl}/routes/${encodeURIComponent(routeId)}/waypoints?direction=${encodeURIComponent(direction || 'outbound')}`;
+        if (fromStop) url += `&from_stop=${encodeURIComponent(fromStop)}`;
+        if (toStop)   url += `&to_stop=${encodeURIComponent(toStop)}`;
+        const res = await fetch(url);
+        if (!res.ok) {
+            waypointsCache[cacheKey] = null;
+            return null;
+        }
+        const data = await res.json();
+        // Convert [{lat, lon}, …] → [[lat, lon], …] for Leaflet
+        const coords = Array.isArray(data) && data.length > 1
+            ? data.map(pt => [pt.lat, pt.lon])
+            : null;
+        waypointsCache[cacheKey] = coords;
+        return coords;
+    } catch (err) {
+        console.error('fetchRouteWaypoints error:', err);
+        waypointsCache[cacheKey] = null;
+        return null;
+    }
+}
+
 const ORS_API_KEY = 'eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjdmZDJkOGZmNzM4MTQyMjk5ZDhhYmM2MGIxNTZiMWU4IiwiaCI6Im11cm11cjY0In0=';
 
 // Cache for ORS route responses keyed by "lat,lon|lat,lon"
@@ -1149,9 +1187,18 @@ async function drawJourneyOnMap(journey) {
             const popupB = `<div><strong>${leg.destination_stop_name || leg.to_stop || leg.destination_stop_id || ''}</strong>${leg.arrival_time ? `<div style="color:#E74C3C;font-weight:600;">Arr: ${leg.arrival_time}</div>` : ''}</div>`;
             L.circleMarker(b, { radius: 6, color: '#2E5090', fillColor: '#fff', weight: 2 }).addTo(routeLayerGroup).bindPopup(popupB);
         }
-        // Draw a straight line for this (non-walking) leg
+        // Draw route for this (non-walking) leg: use stored waypoints when
+        // available, otherwise fall back to a straight line.
         if (a && b) {
-            L.polyline([a, b], { color: '#F39C12', weight: 4, opacity: 0.85 }).addTo(routeLayerGroup);
+            const waypoints = await fetchRouteWaypoints(
+                leg.route_id, leg.direction,
+                leg.origin_stop_id, leg.destination_stop_id
+            );
+            if (waypoints && waypoints.length > 1) {
+                L.polyline(waypoints, { color: '#F39C12', weight: 4, opacity: 0.85 }).addTo(routeLayerGroup);
+            } else {
+                L.polyline([a, b], { color: '#F39C12', weight: 4, opacity: 0.85 }).addTo(routeLayerGroup);
+            }
             lastPoint = b;
         }
 

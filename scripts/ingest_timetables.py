@@ -58,8 +58,55 @@ def days_to_bitmask(days_elem):
     return bitmask if bitmask > 0 else 127
 
 
+def _build_waypoints_from_links(links, stop_coords):
+    """
+    Build an ordered list of (lat, lon, stop_id) waypoints from RouteLink geometry data.
+
+    For each RouteLink the first point is the *from* stop and the last point is the
+    *to* stop (both taken from the stops table so the coordinates are accurate).
+    Any intermediate Track points that exist between those two stops are inserted in
+    between, giving a road-following polyline.  Consecutive RouteLinks share a stop
+    (the *to* of one link equals the *from* of the next), so the shared stop is only
+    appended once.
+    """
+    waypoints = []
+    for i, (from_sp, to_sp, track_pts) in enumerate(links):
+        # Add from_stop for the very first link only (subsequent links already added
+        # this stop as the *to* of the previous link).
+        if i == 0 and from_sp in stop_coords:
+            lat, lon = stop_coords[from_sp]
+            waypoints.append((lat, lon, from_sp))
+
+        # Add intermediate track points, skipping the first and last positions in
+        # the raw track data because they are (approximately) the stop locations
+        # which we handle explicitly with verified DB coordinates.
+        if len(track_pts) > 2:
+            for lat, lon in track_pts[1:-1]:
+                waypoints.append((lat, lon, None))
+
+        # Add to_stop.
+        if to_sp in stop_coords:
+            lat, lon = stop_coords[to_sp]
+            waypoints.append((lat, lon, to_sp))
+
+    return waypoints
+
+
+def _build_waypoints_from_stops(stop_sequence, stop_coords):
+    """
+    Fallback: build waypoints from the ordered stop sequence when no road-following
+    track geometry is available.  Each waypoint is marked with its stop_id.
+    """
+    waypoints = []
+    for stop_ref, _seq, _run_time in stop_sequence:
+        if stop_ref in stop_coords:
+            lat, lon = stop_coords[stop_ref]
+            waypoints.append((lat, lon, stop_ref))
+    return waypoints
+
+
 def parse_txc_xml(conn, xml_content, operator_code):
-    """Parse TransXChange XML and insert into routes, route_stops, and timetables."""
+    """Parse TransXChange XML and insert into routes, route_stops, timetables, and route_waypoints."""
     try:
         root = etree.fromstring(xml_content)
     except Exception as e:
@@ -94,6 +141,8 @@ def parse_txc_xml(conn, xml_content, operator_code):
 
     # 2. Parse JourneyPatterns — maps pattern_id -> (section_id, direction)
     patterns = {}
+    # Also capture optional RouteRef per journey pattern (used for geometry)
+    pattern_route_refs = {}
     for service in root.findall('.//txc:Service', namespaces=NS):
         for jp in service.findall('.//txc:JourneyPattern', namespaces=NS):
             jp_id = jp.get('id')
@@ -101,8 +150,41 @@ def parse_txc_xml(conn, xml_content, operator_code):
                 'txc:Direction', namespaces=NS) or 'outbound'
             section_ref = jp.findtext(
                 'txc:JourneyPatternSectionRefs', namespaces=NS)
+            route_ref = jp.findtext('txc:RouteRef', namespaces=NS)
             if jp_id and section_ref:
                 patterns[jp_id] = (section_ref, direction)
+            if jp_id and route_ref:
+                pattern_route_refs[jp_id] = route_ref
+
+    # 2b. Parse RouteSections — maps section_id -> list of (from_stop, to_stop, track_points)
+    #     track_points is a list of (lat, lon) intermediate road waypoints.
+    route_sections_geo = {}
+    for rs in root.findall('.//txc:RouteSection', namespaces=NS):
+        sid = rs.get('id')
+        links = []
+        for rl in rs.findall('txc:RouteLink', namespaces=NS):
+            from_sp = rl.findtext('txc:From/txc:StopPointRef', namespaces=NS)
+            to_sp = rl.findtext('txc:To/txc:StopPointRef', namespaces=NS)
+            track_pts = []
+            for loc in rl.findall('.//txc:Location', namespaces=NS):
+                lat_str = loc.findtext('txc:Latitude', namespaces=NS)
+                lon_str = loc.findtext('txc:Longitude', namespaces=NS)
+                if lat_str and lon_str:
+                    try:
+                        track_pts.append((float(lat_str), float(lon_str)))
+                    except ValueError:
+                        pass
+            links.append((from_sp, to_sp, track_pts))
+        if links:
+            route_sections_geo[sid] = links
+
+    # 2c. Parse Routes — maps Route element id -> RouteSectionRef
+    routes_to_section = {}
+    for route in root.findall('.//txc:Route', namespaces=NS):
+        rid = route.get('id')
+        sref = route.findtext('txc:RouteSectionRef', namespaces=NS)
+        if rid and sref:
+            routes_to_section[rid] = sref
 
     # 3. Parse Service info
     service_elem = root.find('.//txc:Service', namespaces=NS)
@@ -153,6 +235,47 @@ def parse_txc_xml(conn, xml_content, operator_code):
                         ON CONFLICT (route_id, stop_id, direction, stop_sequence) DO NOTHING;
                     """, (route_id, stop_ref, seq, direction))
                     route_stops_inserted.add(key)
+
+        # 5b. Insert route_waypoints for each (route_id, direction).
+        # Only insert once per direction; skip if already done by a previous JP.
+        cur.execute(
+            "SELECT stop_id, latitude, longitude FROM stops WHERE stop_id = ANY(%s)",
+            (list(valid_stops),)
+        )
+        stop_coords = {row[0]: (row[1], row[2]) for row in cur.fetchall()}
+
+        inserted_wp_directions = set()
+        for jp_id, (section_id, direction) in patterns.items():
+            wp_key = (route_id, direction)
+            if wp_key in inserted_wp_directions:
+                continue
+
+            waypoints = []
+
+            # Prefer track geometry from RouteSections / Routes if available.
+            route_ref = pattern_route_refs.get(jp_id)
+            geo_section_id = routes_to_section.get(route_ref) if route_ref else None
+            if geo_section_id and geo_section_id in route_sections_geo:
+                waypoints = _build_waypoints_from_links(
+                    route_sections_geo[geo_section_id], stop_coords
+                )
+
+            # Fallback: use ordered stop coordinates from the journey pattern.
+            if not waypoints and section_id in sections:
+                waypoints = _build_waypoints_from_stops(
+                    sections[section_id], stop_coords
+                )
+
+            for seq_num, (lat, lon, stop_id) in enumerate(waypoints):
+                cur.execute("""
+                    INSERT INTO route_waypoints
+                        (route_id, direction, sequence, latitude, longitude, stop_id)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (route_id, direction, sequence) DO NOTHING;
+                """, (route_id, direction, seq_num, lat, lon, stop_id))
+
+            if waypoints:
+                inserted_wp_directions.add(wp_key)
 
         # Default placeholder run time (seconds) used when a timing link
         # carries no duration (PT0M0S / 0s).  1 minute per link gives each
