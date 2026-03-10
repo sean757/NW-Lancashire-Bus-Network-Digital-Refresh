@@ -4,12 +4,18 @@ Refreshes every hour.
 """
 
 import asyncio
+import bisect
+import heapq
 import re
+from datetime import date, time as dtime
 from sqlalchemy import text
 from app.database import async_session
 
 
 class RouteCache:
+    # Maximum journey duration accepted by the multi-transfer planner (seconds).
+    MAX_JOURNEY_SECS = 4 * 3600  # 4 hours
+
     def __init__(self):
         # route_id -> {route_name, operator, route_type}
         self.routes = {}
@@ -21,10 +27,25 @@ class RouteCache:
         self.stop_coords = {}
         # stop_id -> stop_name
         self.stop_names = {}
+
+        # ---- Timetable data for multi-transfer routing ----
+        # trip_id -> [(stop_id, seq, arr_secs, dep_secs)] sorted by seq
+        self.trip_stops_sorted = {}
+        # (trip_id, stop_id) -> arr_secs  [fast O(1) arrival lookup]
+        self.trip_arrival_at = {}
+        # (trip_id, stop_id) -> (seq, arr_secs, dep_secs)
+        self.trip_stop_seq = {}
+        # (route_id, direction, stop_id) -> sorted [(dep_secs, trip_id)]
+        self.stop_departures = {}
+        # trip_id -> {route_id, direction, days_of_week, valid_from, valid_until}
+        self.trip_meta = {}
+        # stop_id -> [(other_stop_id, walk_secs)]  (pre-computed foot-path graph)
+        self.foot_paths = {}
+
         self._loaded = False
 
     async def load(self):
-        """Load all route and stop data into memory."""
+        """Load all route, stop, and timetable data into memory."""
         async with async_session() as db:
             # Load routes
             result = await db.execute(text(
@@ -65,9 +86,72 @@ class RouteCache:
                     row["latitude"], row["longitude"])
                 self.stop_names[row["stop_id"]] = row["stop_name"]
 
+            # Load timetable data for multi-transfer routing (RAPTOR / Dijkstra)
+            result = await db.execute(text("""
+                SELECT route_id, stop_id, trip_id,
+                       (EXTRACT(HOUR FROM arrival_time)*3600
+                        + EXTRACT(MINUTE FROM arrival_time)*60
+                        + EXTRACT(SECOND FROM arrival_time))::integer  AS arr_secs,
+                       (EXTRACT(HOUR FROM departure_time)*3600
+                        + EXTRACT(MINUTE FROM departure_time)*60
+                        + EXTRACT(SECOND FROM departure_time))::integer AS dep_secs,
+                       stop_sequence, direction,
+                       days_of_week, valid_from, valid_until
+                FROM timetables
+                ORDER BY trip_id, stop_sequence
+            """))
+
+            self.trip_stops_sorted = {}
+            self.trip_arrival_at = {}
+            self.trip_stop_seq = {}
+            self.stop_departures = {}
+            self.trip_meta = {}
+
+            for row in result.mappings():
+                tid = row["trip_id"]
+                rid = row["route_id"]
+                sid = row["stop_id"]
+                d = row["direction"]
+                seq = row["stop_sequence"]
+                arr = int(row["arr_secs"])
+                dep = int(row["dep_secs"])
+
+                if tid not in self.trip_stops_sorted:
+                    self.trip_stops_sorted[tid] = []
+                self.trip_stops_sorted[tid].append((sid, seq, arr, dep))
+
+                self.trip_arrival_at[(tid, sid)] = arr
+                self.trip_stop_seq[(tid, sid)] = (seq, arr, dep)
+
+                if tid not in self.trip_meta:
+                    self.trip_meta[tid] = {
+                        "route_id": rid,
+                        "direction": d,
+                        "days_of_week": row["days_of_week"],
+                        "valid_from": row["valid_from"],
+                        "valid_until": row["valid_until"],
+                    }
+
+                dep_key = (rid, d, sid)
+                if dep_key not in self.stop_departures:
+                    self.stop_departures[dep_key] = []
+                self.stop_departures[dep_key].append((dep, tid))
+
+        # Sort trip stops and departure lists once
+        for tid in self.trip_stops_sorted:
+            self.trip_stops_sorted[tid].sort(key=lambda x: x[1])
+        for key in self.stop_departures:
+            self.stop_departures[key].sort()
+
+        # Pre-compute walking connections between nearby stops
+        self._compute_foot_paths()
+
         self._loaded = True
         print(
-            f"Route cache loaded: {len(self.routes)} routes, {len(self.stop_routes)} stops with routes")
+            f"Route cache loaded: {len(self.routes)} routes, "
+            f"{len(self.stop_routes)} stops with routes, "
+            f"{len(self.trip_meta)} trips"
+        )
 
     async def refresh_loop(self, interval_secs=3600):
         """Background task to refresh cache periodically."""
@@ -116,8 +200,6 @@ class RouteCache:
     def find_transfer_routes(self, stop_a, stop_b, max_walk_km=0.5):
         """Find routes with one transfer between stop_a and stop_b.
         Looks for intermediate stops within walking distance that connect two routes."""
-        import math
-
         routes_from_a = self.get_routes_for_stop(stop_a)
         routes_to_b = self.get_routes_for_stop(stop_b)
 
@@ -177,6 +259,195 @@ class RouteCache:
                     return transfers
 
         return transfers
+
+    def _compute_foot_paths(self, max_walk_km: float = 0.5):
+        """Pre-compute walking connections between stops within *max_walk_km*.
+
+        Uses a spatial grid (0.01° ≈ 1 km cells) so that only stops in
+        adjacent grid cells are compared, keeping the computation fast even
+        for networks with thousands of stops.
+        """
+        CELL_SIZE = 0.01  # degrees per grid cell (~1 km)
+        WALK_SPEED_KMH = 5.0
+
+        # Build grid index
+        grid: dict = {}
+        for stop_id, (lat, lon) in self.stop_coords.items():
+            cell = (int(lat / CELL_SIZE), int(lon / CELL_SIZE))
+            grid.setdefault(cell, []).append(stop_id)
+
+        foot_paths: dict = {}
+        for stop_id, (lat, lon) in self.stop_coords.items():
+            cell_lat = int(lat / CELL_SIZE)
+            cell_lon = int(lon / CELL_SIZE)
+
+            neighbours = []
+            for dlat in range(-1, 2):
+                for dlon in range(-1, 2):
+                    neighbours.extend(grid.get((cell_lat + dlat, cell_lon + dlon), []))
+
+            foot_paths[stop_id] = []
+            for other_id in neighbours:
+                if other_id == stop_id:
+                    continue
+                other_lat, other_lon = self.stop_coords[other_id]
+                dist = self._haversine(lat, lon, other_lat, other_lon)
+                if dist <= max_walk_km:
+                    walk_secs = int(dist / WALK_SPEED_KMH * 3600)
+                    foot_paths[stop_id].append((other_id, walk_secs))
+
+        self.foot_paths = foot_paths
+
+    def _earliest_trip_from_stop(
+        self,
+        route_id: str,
+        direction: str,
+        stop_id: str,
+        from_secs: int,
+        day_mask: int,
+        dep_date: date,
+    ):
+        """Return (trip_id, dep_secs) for the earliest valid trip on
+        (*route_id*, *direction*) from *stop_id* departing no earlier than
+        *from_secs*, or ``None`` if no such trip exists."""
+        dep_key = (route_id, direction, stop_id)
+        trips = self.stop_departures.get(dep_key)
+        if not trips:
+            return None
+
+        idx = bisect.bisect_left(trips, (from_secs,))
+        # Scan at most this many candidate trips to avoid excessive iteration
+        # when many trips depart close together on the same day/validity range.
+        _MAX_CANDIDATE_TRIPS = 30
+        for dep_s, tid in trips[idx:idx + _MAX_CANDIDATE_TRIPS]:
+            meta = self.trip_meta.get(tid, {})
+            if not (meta.get("days_of_week", 127) & day_mask):
+                continue
+            vf = meta.get("valid_from")
+            vu = meta.get("valid_until")
+            if vf and vf > dep_date:
+                continue
+            if vu and vu < dep_date:
+                continue
+            return tid, dep_s
+
+        return None
+
+    def plan_multi_transfer(
+        self,
+        origin: str,
+        destination: str,
+        dep_time: dtime,
+        dep_date: date,
+        max_transfers: int = 5,
+    ) -> list:
+        """Plan journeys with up to *max_transfers* bus-to-bus transfers.
+
+        Uses a time-dependent Dijkstra over the in-memory timetable.  Each
+        "state" is a (stop_id, num_bus_legs) pair; the priority is earliest
+        arrival time.  Walking between nearby stops is allowed at any point
+        without consuming a transfer slot.
+
+        Returns a list of journey paths.  Each path is a list of leg dicts:
+          Bus leg  – keys: type, route_id, route_name, operator, direction,
+                           trip_id, board_stop, board_secs, alight_stop,
+                           alight_secs
+          Walk leg – keys: type, from_stop, to_stop, walk_secs
+        """
+        if not self._loaded:
+            return []
+
+        INF = float("inf")
+        day_mask = 1 << dep_date.weekday()
+        dep_secs = dep_time.hour * 3600 + dep_time.minute * 60 + dep_time.second
+
+        # best[(stop_id, num_bus_legs)] = earliest arrival_secs reached so far
+        best: dict = {}
+        best[(origin, 0)] = dep_secs
+
+        # Priority queue items: (arrival_secs, num_bus_legs, stop_id, path)
+        # path is a list of leg dicts (bounded at ~2*max_transfers items)
+        pq = [(dep_secs, 0, origin, [])]
+
+        results: list = []
+
+        while pq:
+            curr_secs, num_legs, curr_stop, legs = heapq.heappop(pq)
+
+            # Reached destination — record result
+            if curr_stop == destination and num_legs > 0:
+                results.append(legs)
+                if len(results) >= 3:
+                    break
+                continue
+
+            # Pruning: exceeded maximum transfers
+            if num_legs > max_transfers:
+                continue
+
+            # Pruning: journey too long
+            if curr_secs - dep_secs > self.MAX_JOURNEY_SECS:
+                continue
+
+            # Pruning: a better path to this state was already processed
+            state = (curr_stop, num_legs)
+            if best.get(state, INF) < curr_secs:
+                continue
+
+            # ---- Explore bus routes departing from curr_stop ----
+            for route_id, _seq_at_curr, direction in self.get_routes_for_stop(curr_stop):
+                result = self._earliest_trip_from_stop(
+                    route_id, direction, curr_stop, curr_secs, day_mask, dep_date
+                )
+                if result is None:
+                    continue
+                trip_id, _trip_dep_secs = result
+
+                # Find the boarding stop's position in this trip
+                board_info = self.trip_stop_seq.get((trip_id, curr_stop))
+                if board_info is None:
+                    continue
+                board_seq = board_info[0]
+
+                # Traverse all stops after the boarding stop on this trip
+                for stop_id, seq, arr_secs, _dep_secs in self.trip_stops_sorted.get(trip_id, []):
+                    if seq <= board_seq:
+                        continue
+                    if arr_secs < curr_secs:
+                        continue  # safety: should not happen for valid data
+
+                    new_state = (stop_id, num_legs + 1)
+                    if arr_secs < best.get(new_state, INF):
+                        best[new_state] = arr_secs
+                        new_leg = {
+                            "type": "bus",
+                            "route_id": route_id,
+                            "route_name": self.routes.get(route_id, {}).get("route_name", ""),
+                            "operator": self.routes.get(route_id, {}).get("operator", ""),
+                            "direction": direction,
+                            "trip_id": trip_id,
+                            "board_stop": curr_stop,
+                            "board_secs": curr_secs,
+                            "alight_stop": stop_id,
+                            "alight_secs": arr_secs,
+                        }
+                        heapq.heappush(pq, (arr_secs, num_legs + 1, stop_id, legs + [new_leg]))
+
+            # ---- Walking transfers (free, don't consume a transfer slot) ----
+            for other_stop, walk_secs in self.foot_paths.get(curr_stop, []):
+                walk_arr = curr_secs + walk_secs
+                walk_state = (other_stop, num_legs)
+                if walk_arr < best.get(walk_state, INF):
+                    best[walk_state] = walk_arr
+                    new_walk_leg = {
+                        "type": "walk",
+                        "from_stop": curr_stop,
+                        "to_stop": other_stop,
+                        "walk_secs": walk_secs,
+                    }
+                    heapq.heappush(pq, (walk_arr, num_legs, other_stop, legs + [new_walk_leg]))
+
+        return results
 
     @staticmethod
     def _get_base_name(name: str) -> str:

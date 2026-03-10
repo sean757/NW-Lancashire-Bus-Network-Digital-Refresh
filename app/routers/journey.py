@@ -312,6 +312,88 @@ async def plan_journey(req: JourneyRequest, db: AsyncSession = Depends(get_db)):
                                 ],
                             })
 
+    # ==========================================
+    # 3. Try multi-transfer routes (up to 5 transfers) if still no results
+    # ==========================================
+    if not journeys:
+        for orig_cand in origin_candidates:
+            for dest_cand in destination_candidates:
+                if orig_cand == dest_cand:
+                    continue
+
+                multi_paths = route_cache.plan_multi_transfer(
+                    orig_cand,
+                    dest_cand,
+                    dep_time,
+                    dep_date,
+                    max_transfers=5,
+                )
+
+                for path in multi_paths:
+                    formatted_legs = []
+                    for leg in path:
+                        if leg["type"] == "bus":
+                            board_name = route_cache.stop_names.get(
+                                leg["board_stop"], leg["board_stop"]
+                            )
+                            alight_name = route_cache.stop_names.get(
+                                leg["alight_stop"], leg["alight_stop"]
+                            )
+                            board_secs = leg["board_secs"]
+                            alight_secs = leg["alight_secs"]
+                            dep_str = (
+                                f"{(board_secs // 3600) % 24:02d}:"
+                                f"{(board_secs % 3600) // 60:02d}:"
+                                f"{board_secs % 60:02d}"
+                            )
+                            arr_str = (
+                                f"{(alight_secs // 3600) % 24:02d}:"
+                                f"{(alight_secs % 3600) // 60:02d}:"
+                                f"{alight_secs % 60:02d}"
+                            )
+                            formatted_legs.append({
+                                "mode": "bus",
+                                "route_id": leg["route_id"],
+                                "route_name": leg["route_name"],
+                                "operator": leg["operator"],
+                                "direction": leg["direction"],
+                                "origin_stop_id": leg["board_stop"],
+                                "origin_stop_name": board_name,
+                                "destination_stop_id": leg["alight_stop"],
+                                "destination_stop_name": alight_name,
+                                "departure_time": dep_str,
+                                "arrival_time": arr_str,
+                            })
+                        elif leg["type"] == "walk":
+                            from_name = route_cache.stop_names.get(
+                                leg["from_stop"], leg["from_stop"]
+                            )
+                            to_name = route_cache.stop_names.get(
+                                leg["to_stop"], leg["to_stop"]
+                            )
+                            walk_dist_km = round(leg["walk_secs"] / 3600 * 5.0, 3)
+                            formatted_legs.append({
+                                "mode": "walk",
+                                "distance_km": walk_dist_km,
+                                "from_stop": from_name,
+                                "to_stop": to_name,
+                            })
+
+                    if not formatted_legs:
+                        continue
+
+                    bus_legs = [l for l in formatted_legs if l.get("mode") == "bus"]
+                    num_bus = len(bus_legs)
+                    if num_bus == 0:
+                        continue
+
+                    journey_type = (
+                        "direct" if num_bus == 1
+                        else "transfer" if num_bus == 2
+                        else "multi-transfer"
+                    )
+                    add_journey({"type": journey_type, "legs": formatted_legs})
+
     # Sort by earliest arrival
     def get_arrival(j):
         last_bus_leg = [l for l in j["legs"]
