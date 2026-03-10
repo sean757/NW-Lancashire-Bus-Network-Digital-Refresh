@@ -14,6 +14,11 @@ class Settings(BaseSettings):
     app_title: str = "SCC200 Transport API"
     api_prefix: str = "/api/v1"
 
+    # OpenTripPlanner
+    otp_url: str = "http://localhost:8080"
+    # Router ID used by OTP v1 REST fallback (OTP v2 ignores this)
+    otp_router: str = "default"
+
     # STOMP (National Rail feed)
     stomp_host: str = ""
     stomp_port: int = 61613

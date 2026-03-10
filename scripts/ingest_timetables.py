@@ -1,3 +1,4 @@
+import logging
 import requests
 import psycopg2
 from psycopg2.extras import execute_values
@@ -10,6 +11,9 @@ import re
 
 # Silence SSL warnings
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+log = logging.getLogger(__name__)
 
 DB_CONFIG = {
     "host": "localhost",
@@ -24,6 +28,43 @@ OPERATORS = ["ARCT", "BLAC", "KLCO", "SCCU", "SCMY", "NUTT"]
 
 # TransXChange namespace
 NS = {'txc': 'http://www.transxchange.org.uk/'}
+
+# Approximate bounding box for North West Lancashire (used to validate stop
+# coordinates loaded from the database before using them for route geometry).
+_LAT_MIN, _LAT_MAX = 53.0, 55.0
+_LON_MIN, _LON_MAX = -3.5, -2.0
+
+
+def _sanitize_stop_ref(stop_ref):
+    """Strip whitespace from a stop reference string, return None if empty."""
+    if stop_ref is None:
+        return None
+    cleaned = str(stop_ref).strip()
+    return cleaned if cleaned else None
+
+
+def _validate_stop_coords(stop_coords):
+    """
+    Return a filtered copy of stop_coords that contains only entries whose
+    latitude/longitude values fall within the NW Lancashire bounding box.
+    Entries with non-numeric or out-of-range values are dropped with a warning.
+    """
+    valid = {}
+    for stop_id, (lat, lon) in stop_coords.items():
+        try:
+            lat_f = float(lat)
+            lon_f = float(lon)
+        except (TypeError, ValueError):
+            log.warning("Stop %s has non-numeric coordinates — excluded from geometry.", stop_id)
+            continue
+        if not (_LAT_MIN <= lat_f <= _LAT_MAX) or not (_LON_MIN <= lon_f <= _LON_MAX):
+            log.debug(
+                "Stop %s coordinates (%.5f, %.5f) outside NW Lancashire bounds — excluded.",
+                stop_id, lat_f, lon_f,
+            )
+            continue
+        valid[stop_id] = (lat_f, lon_f)
+    return valid
 
 
 def parse_duration(duration_str):
@@ -115,11 +156,12 @@ def parse_txc_xml(conn, xml_content, operator_code, valid_stops, stop_coords):
         operator_code: e.g. "ARCT".
         valid_stops: set of stop_id strings known to be in the stops table.
         stop_coords: dict mapping stop_id -> (latitude, longitude).
+                     Values have already been validated by _validate_stop_coords().
     """
     try:
         root = etree.fromstring(xml_content)
     except Exception as e:
-        print(f"      XML parse error: {e}")
+        log.warning("XML parse error: %s", e)
         return
 
     # 1. Parse JourneyPatternSections — maps section_id -> list of (stop_ref, sequence, run_time_secs)
@@ -135,14 +177,15 @@ def parse_txc_xml(conn, xml_content, operator_code, valid_stops, stop_coords):
 
             if from_elem is not None and not stops:
                 seq = int(from_elem.get('SequenceNumber', 0))
-                stop_ref = from_elem.findtext(
-                    'txc:StopPointRef', namespaces=NS)
+                stop_ref = _sanitize_stop_ref(
+                    from_elem.findtext('txc:StopPointRef', namespaces=NS))
                 if stop_ref:
                     stops.append((stop_ref, seq, 0))
 
             if to_elem is not None:
                 seq = int(to_elem.get('SequenceNumber', 0))
-                stop_ref = to_elem.findtext('txc:StopPointRef', namespaces=NS)
+                stop_ref = _sanitize_stop_ref(
+                    to_elem.findtext('txc:StopPointRef', namespaces=NS))
                 if stop_ref:
                     stops.append((stop_ref, seq, run_time))
 
@@ -172,8 +215,8 @@ def parse_txc_xml(conn, xml_content, operator_code, valid_stops, stop_coords):
         sid = rs.get('id')
         links = []
         for rl in rs.findall('txc:RouteLink', namespaces=NS):
-            from_sp = rl.findtext('txc:From/txc:StopPointRef', namespaces=NS)
-            to_sp = rl.findtext('txc:To/txc:StopPointRef', namespaces=NS)
+            from_sp = _sanitize_stop_ref(rl.findtext('txc:From/txc:StopPointRef', namespaces=NS))
+            to_sp = _sanitize_stop_ref(rl.findtext('txc:To/txc:StopPointRef', namespaces=NS))
             track_pts = []
             for loc in rl.findall('.//txc:Location', namespaces=NS):
                 lat_str = loc.findtext('txc:Latitude', namespaces=NS)
@@ -352,25 +395,24 @@ def parse_txc_xml(conn, xml_content, operator_code, valid_stops, stop_coords):
 
         journey_count = len(timetables_batch)
         if journey_count > 0:
-            print(
-                f"      Route {line_name} ({route_id}): {journey_count} timetable entries")
+            log.info("Route %s (%s): %d timetable entries", line_name, route_id, journey_count)
 
     conn.commit()
 
 
 def download_and_extract(conn, zip_url, operator_code, valid_stops, stop_coords):
     """Download ZIP and process contained XML files."""
-    print(f"   Downloading ZIP from: {zip_url}")
+    log.info("Downloading ZIP from: %s", zip_url)
     try:
         response = requests.get(zip_url, verify=False, timeout=30)
         with zipfile.ZipFile(io.BytesIO(response.content)) as z:
             # Process every XML file inside the ZIP
             xml_files = [f for f in z.namelist() if f.endswith('.xml')]
-            print(f"    Found {len(xml_files)} XML files")
+            log.info("Found %d XML files", len(xml_files))
             for filename in xml_files:
                 parse_txc_xml(conn, z.read(filename), operator_code, valid_stops, stop_coords)
     except Exception as e:
-        print(f"   Error processing ZIP: {e}")
+        log.error("Error processing ZIP: %s", e)
 
 
 def run_ingestion():
@@ -380,30 +422,36 @@ def run_ingestion():
         # No table creation — schema managed by init_db.sql
 
         # Pre-load stop data once for all operators/files to avoid repeated DB queries.
-        print(" Pre-loading stop data from database...")
+        log.info("Pre-loading stop data from database...")
         with conn.cursor() as cur:
             cur.execute("SELECT stop_id FROM stops")
             valid_stops = {row[0] for row in cur.fetchall()}
             cur.execute("SELECT stop_id, latitude, longitude FROM stops")
-            stop_coords = {row[0]: (row[1], row[2]) for row in cur.fetchall()}
-        print(f"  Loaded {len(valid_stops)} stops.")
+            raw_coords = {row[0]: (row[1], row[2]) for row in cur.fetchall()}
+
+        # Validate coordinates so out-of-range stops do not corrupt geometry.
+        stop_coords = _validate_stop_coords(raw_coords)
+        excluded = len(raw_coords) - len(stop_coords)
+        log.info(
+            "Loaded %d stops (%d excluded for invalid/out-of-range coordinates).",
+            len(stop_coords), excluded,
+        )
 
         for operator in OPERATORS:
             discovery_url = f"https://transport.scc.lancs.ac.uk/bus/times/{operator}"
-            print(
-                f"\n Fetching discovery data for {operator} from {discovery_url}...")
+            log.info("Fetching discovery data for %s from %s...", operator, discovery_url)
 
             try:
                 response = requests.get(
                     discovery_url, verify=False, timeout=15)
                 data = response.json()
             except Exception as e:
-                print(f"   Error fetching {operator}: {e}")
+                log.error("Error fetching %s: %s", operator, e)
                 continue
 
             # Access the 'results' list from the API
             results = data.get('results', [])
-            print(f"  Found {len(results)} dataset records for {operator}.")
+            log.info("Found %d dataset records for %s.", len(results), operator)
 
             for item in results:
                 # Get the download URL and extension from the JSON
@@ -414,10 +462,10 @@ def run_ingestion():
                     download_and_extract(conn, zip_url, operator, valid_stops, stop_coords)
 
         conn.close()
-        print("\n All timetable data processed successfully!")
+        log.info("All timetable data processed successfully.")
 
     except Exception as e:
-        print(f" Ingestion failed: {e}")
+        log.error("Ingestion failed: %s", e)
 
 
 if __name__ == "__main__":

@@ -1,1 +1,37 @@
-git update-index --assume-unchanged .devcontainer/devcontainer.json
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+.venv/
+venv/
+env/
+pip-wheel-metadata/
+
+# GTFS export artefacts
+gtfs_export.zip
+gtfs_output/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Environment
+.env
+.env.local
+
+# Pytest / coverage
+.pytest_cache/
+.coverage
+htmlcov/
