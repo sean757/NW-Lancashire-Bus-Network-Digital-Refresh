@@ -91,8 +91,8 @@ Generate the GTFS export from the ingested database:
 python -u scripts/export_gtfs.py gtfs_export.zip
 ```
 
-This exports a sanitised GTFS ZIP containing `agency.txt`, `stops.txt`,
-`routes.txt`, `trips.txt`, `stop_times.txt`, and `calendar.txt`.
+This exports a sanitised GTFS ZIP containing `feed_info.txt`, `agency.txt`,
+`stops.txt`, `routes.txt`, `trips.txt`, `stop_times.txt`, and `calendar.txt`.
 
 ### 8. Start OpenTripPlanner
 
