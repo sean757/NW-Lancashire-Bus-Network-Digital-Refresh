@@ -8,7 +8,13 @@
   "runArgs": [
     "--network=host"
   ],
-  "postCreateCommand": "apt-get update && apt-get install -y postgresql-client default-jre && pip install fastapi uvicorn[standard] asyncpg sqlalchemy[asyncio] pydantic-settings stomp.py httpx python-dotenv lxml psycopg2-binary requests && npm install --prefix front-end",
+  "features": {
+    "ghcr.io/devcontainers/features/java:1": {
+      "version": "21",
+      "jdkDistro": "tem"
+    }
+  },
+  "postCreateCommand": "apt-get update && apt-get install -y postgresql-client && pip install fastapi uvicorn[standard] asyncpg sqlalchemy[asyncio] pydantic-settings stomp.py httpx python-dotenv lxml psycopg2-binary requests && npm install --prefix front-end",
   "postStartCommand": "npm start --prefix front-end",
   "forwardPorts": [
     8000
