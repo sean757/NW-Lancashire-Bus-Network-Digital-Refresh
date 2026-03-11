@@ -352,6 +352,19 @@ def parse_txc_xml(conn, xml_content, operator_code, valid_stops, stop_coords):
             days_elem = vj.find('.//txc:DaysOfWeek', namespaces=NS)
             days_bitmask = days_to_bitmask(days_elem)
 
+            # Build a globally unique trip_id.
+            # VehicleJourneyCode is only unique within a single TXC service
+            # file — the same code (e.g. "1", "VJ001") is reused across
+            # different operators and routes, which causes separate trips to
+            # be merged together when building the GTFS export.  To prevent
+            # this, prefix with route_id.  When the code is absent we fall
+            # back to departure_str + direction, which is unique per route.
+            trip_id = (
+                f"{route_id}_{vj_code}"
+                if vj_code
+                else f"{route_id}_{departure_str}_{direction}"
+            )
+
             # Calculate arrival/departure times by accumulating run times
             dep_parts = departure_str.split(':')
             base_hour, base_min, base_sec = int(dep_parts[0]), int(
@@ -379,7 +392,7 @@ def parse_txc_xml(conn, xml_content, operator_code, valid_stops, stop_coords):
                 arrival_time = f"{arr_h:02d}:{arr_m:02d}:{arr_s:02d}"
 
                 timetables_batch.append((
-                    route_id, stop_ref, vj_code,
+                    route_id, stop_ref, trip_id,
                     arrival_time, arrival_time,
                     seq, direction, days_bitmask, start_date, end_date,
                 ))

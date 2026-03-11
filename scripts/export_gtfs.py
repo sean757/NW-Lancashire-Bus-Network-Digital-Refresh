@@ -299,6 +299,14 @@ def fetch_trips_stop_times_calendar(
     - Rows with unparseable times are discarded.
     - Trips with fewer than 2 valid stop_times are discarded (OTP needs at
       least an origin and a destination).
+
+    The GTFS trip_id emitted for each trip is guaranteed to be globally unique
+    across all routes.  If the stored trip_id does not already begin with the
+    route_id prefix (possible with data ingested before the ingest_timetables
+    fix), the export prefixes it automatically so that trips from different
+    routes that happen to share the same raw VehicleJourneyCode value are kept
+    separate.  After re-running ingest_timetables.py the stored trip_ids will
+    already carry the route prefix and no double-prefixing occurs.
     """
     with conn.cursor() as cur:
         cur.execute(
@@ -310,14 +318,15 @@ def fetch_trips_stop_times_calendar(
                 t.days_of_week, t.valid_from, t.valid_until
             FROM timetables t
             JOIN routes r ON r.route_id = t.route_id AND r.active = TRUE
-            ORDER BY t.trip_id, t.stop_sequence
+            ORDER BY t.route_id, t.trip_id, t.stop_sequence
             """
         )
         rows = cur.fetchall()
 
+    # Keyed by the globally-unique GTFS trip_id string.
     trips_dict: Dict[str, Dict] = {}
     calendars: Dict[str, Dict] = {}
-    # trip_id -> list of stop_time rows (validated)
+    # gtfs_trip_id -> list of stop_time rows (validated)
     st_by_trip: Dict[str, List[Dict]] = defaultdict(list)
 
     skipped_invalid = 0
@@ -353,6 +362,15 @@ def fetch_trips_stop_times_calendar(
             skipped_invalid += 1
             continue
 
+        # Build a globally unique GTFS trip_id.
+        # VehicleJourneyCode values (stored as trip_id) are only unique within
+        # a single TXC service file.  After the ingest_timetables.py fix, the
+        # stored trip_id already carries a "route_id_" prefix; for any older
+        # data that lacks the prefix we add it here so that trips from different
+        # routes never share the same GTFS trip_id.
+        route_prefix = rid + "_"
+        gtfs_tid = tid if tid.startswith(route_prefix) else f"{rid}_{tid}"
+
         # Build service calendar entry
         bitmask = int(raw_bitmask) if raw_bitmask is not None else 127
         svc_id = make_service_id(bitmask, valid_from, valid_until)
@@ -364,19 +382,19 @@ def fetch_trips_stop_times_calendar(
                 "end_date":   gtfs_date(valid_until) if valid_until else gtfs_date(DEFAULT_END_DATE),
             }
 
-        # Register trip
-        if tid not in trips_dict:
+        # Register trip (keyed by gtfs_tid to keep each route's trips separate)
+        if gtfs_tid not in trips_dict:
             direction_id = 1 if (raw_dir or "").strip().lower() == "inbound" else 0
-            trips_dict[tid] = {
+            trips_dict[gtfs_tid] = {
                 "route_id": rid,
                 "service_id": svc_id,
-                "trip_id": tid,
+                "trip_id": gtfs_tid,
                 "trip_headsign": "",
                 "direction_id": direction_id,
             }
 
-        st_by_trip[tid].append({
-            "trip_id": tid,
+        st_by_trip[gtfs_tid].append({
+            "trip_id": gtfs_tid,
             "arrival_time": arr,
             "departure_time": dep,
             "stop_id": sid,
@@ -396,11 +414,11 @@ def fetch_trips_stop_times_calendar(
     stop_times: List[Dict] = []
     discarded_trips = 0
 
-    for tid, rows_for_trip in st_by_trip.items():
+    for gtfs_tid, rows_for_trip in st_by_trip.items():
         if len(rows_for_trip) < 2:
             discarded_trips += 1
             continue
-        valid_trips.append(trips_dict[tid])
+        valid_trips.append(trips_dict[gtfs_tid])
         stop_times.extend(rows_for_trip)
 
     if discarded_trips:
