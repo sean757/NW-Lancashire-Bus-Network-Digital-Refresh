@@ -55,7 +55,8 @@ def _validate_stop_coords(stop_coords):
             lat_f = float(lat)
             lon_f = float(lon)
         except (TypeError, ValueError):
-            log.warning("Stop %s has non-numeric coordinates — excluded from geometry.", stop_id)
+            log.warning(
+                "Stop %s has non-numeric coordinates — excluded from geometry.", stop_id)
             continue
         if not (_LAT_MIN <= lat_f <= _LAT_MAX) or not (_LON_MIN <= lon_f <= _LON_MAX):
             log.debug(
@@ -153,7 +154,8 @@ def parse_txc_xml(conn, xml_content, operator_code, valid_stops, stop_coords):
     Args:
         conn: psycopg2 connection (must already be open).
         xml_content: raw bytes of the TransXChange XML file.
-        operator_code: e.g. "ARCT".
+        operator_code: fallback operator code (e.g. "ARCT") used only when
+            the XML does not contain a <NationalOperatorCode> element.
         valid_stops: set of stop_id strings known to be in the stops table.
         stop_coords: dict mapping stop_id -> (latitude, longitude).
                      Values have already been validated by _validate_stop_coords().
@@ -163,6 +165,24 @@ def parse_txc_xml(conn, xml_content, operator_code, valid_stops, stop_coords):
     except Exception as e:
         log.warning("XML parse error: %s", e)
         return
+
+    # --- Determine the real operator from the XML itself ---
+    # TransXChange files embed one or more <Operator> elements, each with a
+    # <NationalOperatorCode>.  Use the first one found; fall back to the
+    # caller-supplied operator_code only when the element is absent.
+    xml_noc = None
+    for op_elem in root.findall('.//txc:Operator', namespaces=NS):
+        noc = (op_elem.findtext('txc:NationalOperatorCode',
+               namespaces=NS) or '').strip()
+        if noc:
+            xml_noc = noc
+            break
+    if xml_noc and xml_noc != operator_code:
+        log.debug(
+            "XML NationalOperatorCode '%s' overrides caller-supplied '%s'.",
+            xml_noc, operator_code,
+        )
+        operator_code = xml_noc
 
     # 1. Parse JourneyPatternSections — maps section_id -> list of (stop_ref, sequence, run_time_secs)
     sections = {}
@@ -215,8 +235,10 @@ def parse_txc_xml(conn, xml_content, operator_code, valid_stops, stop_coords):
         sid = rs.get('id')
         links = []
         for rl in rs.findall('txc:RouteLink', namespaces=NS):
-            from_sp = _sanitize_stop_ref(rl.findtext('txc:From/txc:StopPointRef', namespaces=NS))
-            to_sp = _sanitize_stop_ref(rl.findtext('txc:To/txc:StopPointRef', namespaces=NS))
+            from_sp = _sanitize_stop_ref(rl.findtext(
+                'txc:From/txc:StopPointRef', namespaces=NS))
+            to_sp = _sanitize_stop_ref(rl.findtext(
+                'txc:To/txc:StopPointRef', namespaces=NS))
             track_pts = []
             for loc in rl.findall('.//txc:Location', namespaces=NS):
                 lat_str = loc.findtext('txc:Latitude', namespaces=NS)
@@ -278,7 +300,8 @@ def parse_txc_xml(conn, xml_content, operator_code, valid_stops, stop_coords):
                     continue
                 key = (route_id, stop_ref, direction, seq)
                 if key not in route_stops_seen:
-                    route_stops_batch.append((route_id, stop_ref, seq, direction))
+                    route_stops_batch.append(
+                        (route_id, stop_ref, seq, direction))
                     route_stops_seen.add(key)
 
         if route_stops_batch:
@@ -301,7 +324,8 @@ def parse_txc_xml(conn, xml_content, operator_code, valid_stops, stop_coords):
 
             # Prefer track geometry from RouteSections / Routes if available.
             route_ref = pattern_route_refs.get(jp_id)
-            geo_section_id = routes_to_section.get(route_ref) if route_ref else None
+            geo_section_id = routes_to_section.get(
+                route_ref) if route_ref else None
             if geo_section_id and geo_section_id in route_sections_geo:
                 waypoints = _build_waypoints_from_links(
                     route_sections_geo[geo_section_id], stop_coords
@@ -314,7 +338,8 @@ def parse_txc_xml(conn, xml_content, operator_code, valid_stops, stop_coords):
                 )
 
             for seq_num, (lat, lon, stop_id) in enumerate(waypoints):
-                waypoints_batch.append((route_id, direction, seq_num, lat, lon, stop_id))
+                waypoints_batch.append(
+                    (route_id, direction, seq_num, lat, lon, stop_id))
 
             if waypoints:
                 inserted_wp_directions.add(wp_key)
@@ -375,7 +400,8 @@ def parse_txc_xml(conn, xml_content, operator_code, valid_stops, stop_coords):
                 # The first stop legitimately has zero travel time (it is the
                 # origin).  For every subsequent stop, substitute the placeholder
                 # when the source data provides no run time.
-                effective_run_time = run_time if (i == 0 or run_time > 0) else PLACEHOLDER_RUN_TIME_SECS
+                effective_run_time = run_time if (
+                    i == 0 or run_time > 0) else PLACEHOLDER_RUN_TIME_SECS
                 # Accumulate the travel time to reach this stop first,
                 # so arrival_secs reflects when the bus arrives here.
                 cumulative_secs += effective_run_time
@@ -408,13 +434,19 @@ def parse_txc_xml(conn, xml_content, operator_code, valid_stops, stop_coords):
 
         journey_count = len(timetables_batch)
         if journey_count > 0:
-            log.info("Route %s (%s): %d timetable entries", line_name, route_id, journey_count)
+            log.info("Route %s (%s): %d timetable entries",
+                     line_name, route_id, journey_count)
 
     conn.commit()
 
 
-def download_and_extract(conn, zip_url, operator_code, valid_stops, stop_coords):
-    """Download a ZIP or XML file and process any TransXChange XML content."""
+def download_and_extract(conn, zip_url, fallback_operator, valid_stops, stop_coords):
+    """Download a ZIP or XML file and process any TransXChange XML content.
+
+    The real operator code is extracted from each XML file's
+    <NationalOperatorCode> element.  *fallback_operator* is only used when
+    that element is missing.
+    """
     log.info("Downloading from: %s", zip_url)
     try:
         response = requests.get(zip_url, verify=False, timeout=30)
@@ -422,14 +454,17 @@ def download_and_extract(conn, zip_url, operator_code, valid_stops, stop_coords)
         # Attempt to process as a ZIP archive first; fall back to raw XML.
         try:
             with zipfile.ZipFile(io.BytesIO(content)) as z:
-                xml_files = [f for f in z.namelist() if f.lower().endswith('.xml')]
+                xml_files = [f for f in z.namelist(
+                ) if f.lower().endswith('.xml')]
                 log.info("Found %d XML files in ZIP", len(xml_files))
                 for filename in xml_files:
-                    parse_txc_xml(conn, z.read(filename), operator_code, valid_stops, stop_coords)
+                    parse_txc_xml(conn, z.read(filename),
+                                  fallback_operator, valid_stops, stop_coords)
         except zipfile.BadZipFile:
             # Not a ZIP — treat the downloaded content as raw TransXChange XML.
             log.info("Response is not a ZIP; attempting to parse as raw XML.")
-            parse_txc_xml(conn, content, operator_code, valid_stops, stop_coords)
+            parse_txc_xml(conn, content, fallback_operator,
+                          valid_stops, stop_coords)
     except Exception as e:
         log.error("Error processing %s: %s", zip_url, e)
 
@@ -456,9 +491,16 @@ def run_ingestion():
             len(stop_coords), excluded,
         )
 
+        # Track dataset URLs already processed so the same ZIP is not
+        # downloaded and parsed multiple times.  The discovery API often
+        # returns identical datasets for related operator codes (e.g. all
+        # Stagecoach subsidiaries share the same 13 dataset entries).
+        seen_urls: set = set()
+
         for operator in OPERATORS:
             discovery_url = f"https://transport.scc.lancs.ac.uk/bus/times/{operator}"
-            log.info("Fetching discovery data for %s from %s...", operator, discovery_url)
+            log.info("Fetching discovery data for %s from %s...",
+                     operator, discovery_url)
 
             try:
                 response = requests.get(
@@ -470,7 +512,8 @@ def run_ingestion():
 
             # Access the 'results' list from the API
             results = data.get('results', [])
-            log.info("Found %d dataset records for %s.", len(results), operator)
+            log.info("Found %d dataset records for %s.",
+                     len(results), operator)
 
             for item in results:
                 # Get the download URL and extension from the JSON
@@ -478,7 +521,15 @@ def run_ingestion():
                 ext = item.get('extension')
 
                 if zip_url and (ext or "").lower() in ("zip", "xml"):
-                    download_and_extract(conn, zip_url, operator, valid_stops, stop_coords)
+                    if zip_url in seen_urls:
+                        log.info("Skipping already-processed URL: %s", zip_url)
+                        continue
+                    seen_urls.add(zip_url)
+                    # The operator from the outer loop is passed as a
+                    # fallback only; parse_txc_xml extracts the real
+                    # NationalOperatorCode from inside each XML file.
+                    download_and_extract(
+                        conn, zip_url, operator, valid_stops, stop_coords)
 
         conn.close()
         log.info("All timetable data processed successfully.")

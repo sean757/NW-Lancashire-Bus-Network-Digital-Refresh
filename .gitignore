@@ -38,3 +38,5 @@ htmlcov/
 # Large binaries and map data (generated, don't commit)
 otp-shaded-2.8.1.jar
 lancashire-latest.osm.pbf
+
+gtfs_export.zip
