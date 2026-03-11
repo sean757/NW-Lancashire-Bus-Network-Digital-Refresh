@@ -428,6 +428,74 @@ def download_and_extract(conn, zip_url, operator_code, valid_stops, stop_coords)
         log.error("Error processing ZIP: %s", e)
 
 
+BODS_API_URL = "https://data.bus-data.dft.gov.uk/api/v1/dataset/"
+
+
+def _fetch_scc_datasets(operator: str) -> list:
+    """Fetch dataset records for *operator* from the SCC discovery API.
+
+    Returns a list of dicts with at least ``url`` and ``extension`` keys,
+    normalised to lowercase extension.  Returns an empty list on any error or
+    when the API reports no records.
+    """
+    discovery_url = f"https://transport.scc.lancs.ac.uk/bus/times/{operator}"
+    log.info("Fetching SCC discovery data for %s from %s...", operator, discovery_url)
+    try:
+        response = requests.get(discovery_url, verify=False, timeout=15)
+        if not response.ok:
+            log.warning(
+                "SCC API returned HTTP %d for %s.", response.status_code, operator
+            )
+            return []
+        data = response.json()
+    except (requests.RequestException, ValueError) as e:
+        log.error("Error fetching SCC data for %s: %s", operator, e)
+        return []
+
+    results = data.get("results", [])
+    # Normalise the extension field to lowercase so the comparison below is
+    # case-insensitive (the SCC API has been observed to return both "zip" and
+    # "ZIP" depending on the operator).
+    normalised = []
+    for item in results:
+        if item.get("url"):
+            normalised.append({
+                "url": item["url"],
+                "extension": (item.get("extension") or "").lower(),
+            })
+    log.info("SCC API: found %d dataset record(s) for %s.", len(normalised), operator)
+    return normalised
+
+
+def _fetch_bods_datasets(operator: str) -> list:
+    """Fetch dataset records for *operator* from the national Bus Open Data
+    Service (BODS) API as a fallback when the SCC API returns nothing.
+
+    Returns a list of dicts with ``url`` and ``extension`` keys (extension is
+    always "zip" because BODS only publishes ZIP archives).
+    """
+    url = f"{BODS_API_URL}?noc={operator}&status=published"
+    log.info("Trying BODS fallback for %s from %s...", operator, url)
+    try:
+        response = requests.get(url, timeout=15)
+        if not response.ok:
+            log.warning(
+                "BODS API returned HTTP %d for %s.", response.status_code, operator
+            )
+            return []
+        data = response.json()
+    except (requests.RequestException, ValueError) as e:
+        log.error("Error fetching BODS data for %s: %s", operator, e)
+        return []
+
+    results = []
+    for item in data.get("results", []):
+        if item.get("url"):
+            results.append({"url": item["url"], "extension": "zip"})
+    log.info("BODS API: found %d dataset record(s) for %s.", len(results), operator)
+    return results
+
+
 def run_ingestion():
     """Main execution logic — fetches all operators from the Discovery API."""
     try:
@@ -451,25 +519,25 @@ def run_ingestion():
         )
 
         for operator in OPERATORS:
-            discovery_url = f"https://transport.scc.lancs.ac.uk/bus/times/{operator}"
-            log.info("Fetching discovery data for %s from %s...", operator, discovery_url)
+            # Try the primary SCC discovery API first.
+            results = _fetch_scc_datasets(operator)
 
-            try:
-                response = requests.get(
-                    discovery_url, verify=False, timeout=15)
-                data = response.json()
-            except Exception as e:
-                log.error("Error fetching %s: %s", operator, e)
+            # Fall back to the national BODS API when the SCC API returns no
+            # data for this operator (e.g. SCCU routes that are not registered
+            # in the SCC system).
+            if not results:
+                log.info(
+                    "No SCC data for %s — attempting BODS fallback.", operator
+                )
+                results = _fetch_bods_datasets(operator)
+
+            if not results:
+                log.warning("No timetable data found for %s from any source.", operator)
                 continue
 
-            # Access the 'results' list from the API
-            results = data.get('results', [])
-            log.info("Found %d dataset records for %s.", len(results), operator)
-
             for item in results:
-                # Get the download URL and extension from the JSON
-                zip_url = item.get('url')
-                ext = item.get('extension')
+                zip_url = item.get("url")
+                ext = item.get("extension", "").lower()
 
                 if zip_url and ext == "zip":
                     download_and_extract(conn, zip_url, operator, valid_stops, stop_coords)

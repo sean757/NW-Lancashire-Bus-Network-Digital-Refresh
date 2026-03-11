@@ -613,7 +613,7 @@ function initializeLeafletMap() {
     updateZoomHint();
 
     // Map click hint control – shows what the next map click will do
-    const clickHintControl = L.control({ position: 'bottomleft' });
+    const clickHintControl = L.control({ position: 'bottomright' });
     clickHintControl.onAdd = function () {
         const div = L.DomUtil.create('div', 'map-click-hint');
         div.setAttribute('aria-live', 'polite');
