@@ -1113,6 +1113,9 @@ async function ensureSelectedFromInput(isStart = true) {
     return false;
 }
 
+// Distinct colours used to distinguish consecutive bus legs on the map.
+const LEG_COLOURS = ['#E74C3C', '#8E44AD', '#2980B9', '#27AE60', '#F39C12', '#16A085', '#D35400', '#2C3E50'];
+
 async function drawJourneyOnMap(journey) {
     if (!map) return;
     clearRouteLayers();
@@ -1146,34 +1149,46 @@ async function drawJourneyOnMap(journey) {
     const legs = journey.legs || [];
     const polylinePoints = [];
     let lastPoint = null;
+    let busLegIndex = 0;
     for (let i = 0; i < legs.length; i++) {
         const leg = legs[i];
         if (leg.mode === 'walk') {
-            // Draw walking transfer as dashed line between previous and next bus points
-            // find next bus leg origin
-            let nextBusCoords = null;
-            for (let j = i + 1; j < legs.length; j++) {
-                if ((legs[j].mode || 'bus') === 'walk') continue;
-                nextBusCoords = await coordsForLegEndpoint(legs[j], 'origin_stop_id');
-                if (nextBusCoords) break;
-            }
-            if (lastPoint && nextBusCoords) {
-                try {
-                    console.log(`Routing walking leg from ${lastPoint} to ${nextBusCoords}`);
-                    const routed = await routeAlongRoad(lastPoint, nextBusCoords, 'walking');
-                    if (routed && routed.length) {
-                        L.polyline(routed, { color: '#3E8EDE', weight: 3, opacity: 0.8, dashArray: '8,6' }).addTo(routeLayerGroup);
-                    } else {
-                        L.polyline([lastPoint, nextBusCoords], { color: '#3E8EDE', weight: 3, opacity: 0.8, dashArray: '8,6' }).addTo(routeLayerGroup);
-                    }
-                } catch (err) {
-                    L.polyline([lastPoint, nextBusCoords], { color: '#3E8EDE', weight: 3, opacity: 0.8, dashArray: '8,6' }).addTo(routeLayerGroup);
+            // Draw walking transfer as dashed line.
+            // Prefer waypoints provided by the OTP server (leg.waypoints), then
+            // try OpenRouteService, and finally fall back to a straight line.
+            const walkStyle = { color: '#3E8EDE', weight: 3, opacity: 0.8, dashArray: '8,6' };
+            if (leg.waypoints && leg.waypoints.length > 1) {
+                // Use the detailed walking geometry supplied by OTP.
+                L.polyline(leg.waypoints, walkStyle).addTo(routeLayerGroup);
+            } else {
+                // Fall back to OpenRouteService or a straight line between the
+                // previous bus leg's last stop and the next bus leg's first stop.
+                let nextBusCoords = null;
+                for (let j = i + 1; j < legs.length; j++) {
+                    if ((legs[j].mode || 'bus') === 'walk') continue;
+                    nextBusCoords = await coordsForLegEndpoint(legs[j], 'origin_stop_id');
+                    if (nextBusCoords) break;
                 }
-                // don't update lastPoint here; next bus leg will set it
+                if (lastPoint && nextBusCoords) {
+                    try {
+                        console.log(`Routing walking leg from ${lastPoint} to ${nextBusCoords}`);
+                        const routed = await routeAlongRoad(lastPoint, nextBusCoords, 'walking');
+                        if (routed && routed.length) {
+                            L.polyline(routed, walkStyle).addTo(routeLayerGroup);
+                        } else {
+                            L.polyline([lastPoint, nextBusCoords], walkStyle).addTo(routeLayerGroup);
+                        }
+                    } catch (err) {
+                        L.polyline([lastPoint, nextBusCoords], walkStyle).addTo(routeLayerGroup);
+                    }
+                }
             }
+            // don't update lastPoint here; next bus leg will set it
             continue;
         }
-        // bus or default leg
+        // bus or default leg — assign a unique colour per leg
+        const legColor = LEG_COLOURS[busLegIndex % LEG_COLOURS.length];
+        busLegIndex++;
         const a = await coordsForLegEndpoint(leg, 'origin_stop_id');
         const b = await coordsForLegEndpoint(leg, 'destination_stop_id');
         if (a) polylinePoints.push(a);
@@ -1181,11 +1196,11 @@ async function drawJourneyOnMap(journey) {
         // Draw marker for origin and destination of this leg
         if (a) {
             const popupA = `<div><strong>${leg.origin_stop_name || leg.from_stop || leg.origin_stop_id || ''}</strong>${leg.departure_time ? `<div style="color:#27AE60;font-weight:600;">Dep: ${leg.departure_time}</div>` : ''}</div>`;
-            L.circleMarker(a, { radius: 6, color: '#2E5090', fillColor: '#fff', weight: 2 }).addTo(routeLayerGroup).bindPopup(popupA);
+            L.circleMarker(a, { radius: 6, color: legColor, fillColor: '#fff', weight: 2 }).addTo(routeLayerGroup).bindPopup(popupA);
         }
         if (b) {
             const popupB = `<div><strong>${leg.destination_stop_name || leg.to_stop || leg.destination_stop_id || ''}</strong>${leg.arrival_time ? `<div style="color:#E74C3C;font-weight:600;">Arr: ${leg.arrival_time}</div>` : ''}</div>`;
-            L.circleMarker(b, { radius: 6, color: '#2E5090', fillColor: '#fff', weight: 2 }).addTo(routeLayerGroup).bindPopup(popupB);
+            L.circleMarker(b, { radius: 6, color: legColor, fillColor: '#fff', weight: 2 }).addTo(routeLayerGroup).bindPopup(popupB);
         }
         // Draw route for this (non-walking) leg: use stored waypoints when
         // available, otherwise fall back to a straight line.
@@ -1195,9 +1210,9 @@ async function drawJourneyOnMap(journey) {
                 leg.origin_stop_id, leg.destination_stop_id
             );
             if (waypoints && waypoints.length > 1) {
-                L.polyline(waypoints, { color: '#F39C12', weight: 4, opacity: 0.85 }).addTo(routeLayerGroup);
+                L.polyline(waypoints, { color: legColor, weight: 4, opacity: 0.85 }).addTo(routeLayerGroup);
             } else {
-                L.polyline([a, b], { color: '#F39C12', weight: 4, opacity: 0.85 }).addTo(routeLayerGroup);
+                L.polyline([a, b], { color: legColor, weight: 4, opacity: 0.85 }).addTo(routeLayerGroup);
             }
             lastPoint = b;
         }

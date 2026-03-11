@@ -17,7 +17,7 @@ OTP v1 REST fallback (used when v2 is unreachable):
 
 import logging
 from datetime import date, time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 
@@ -78,6 +78,7 @@ query PlanJourney(
           agency { name }
         }
         trip { directionId }
+        legGeometry { length points }
       }
     }
   }
@@ -123,6 +124,48 @@ def _transfer_penalty(preference: str) -> int:
     return 300 if preference == "least-changes" else 0
 
 
+def _decode_polyline(encoded: str) -> List[List[float]]:
+    """
+    Decode a Google Encoded Polyline string into a list of [lat, lon] pairs.
+
+    OTP returns walking-leg geometry as an encoded polyline in
+    ``legGeometry.points``.  This decoder converts that string into plain
+    coordinate pairs so the frontend can draw the walking path directly.
+    """
+    if not encoded:
+        return []
+    coords: List[List[float]] = []
+    index = 0
+    lat = 0
+    lng = 0
+    n = len(encoded)
+    while index < n:
+        result, shift = 0, 0
+        while True:
+            b = ord(encoded[index]) - 63
+            index += 1
+            result |= (b & 0x1F) << shift
+            shift += 5
+            if b < 0x20:
+                break
+        dlat = ~(result >> 1) if result & 1 else result >> 1
+        lat += dlat
+
+        result, shift = 0, 0
+        while True:
+            b = ord(encoded[index]) - 63
+            index += 1
+            result |= (b & 0x1F) << shift
+            shift += 5
+            if b < 0x20:
+                break
+        dlng = ~(result >> 1) if result & 1 else result >> 1
+        lng += dlng
+
+        coords.append([round(lat / 1e5, 6), round(lng / 1e5, 6)])
+    return coords
+
+
 # ---------------------------------------------------------------------------
 # Response parsing (shared between v1 and v2)
 # ---------------------------------------------------------------------------
@@ -137,12 +180,18 @@ def _parse_legs(otp_legs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         if mode == "WALK":
             from_place = otp_leg.get("from") or {}
             to_place = otp_leg.get("to") or {}
-            legs.append({
+            leg_geom = otp_leg.get("legGeometry") or {}
+            encoded_pts = leg_geom.get("points") or ""
+            waypoints = _decode_polyline(encoded_pts)
+            walk_leg: Dict[str, Any] = {
                 "mode": "walk",
                 "from_stop": from_place.get("name", ""),
                 "to_stop": to_place.get("name", ""),
                 "distance_km": round((otp_leg.get("distance") or 0) / 1000.0, 3),
-            })
+            }
+            if waypoints:
+                walk_leg["waypoints"] = waypoints
+            legs.append(walk_leg)
 
         elif mode in _TRANSIT_MODES:
             from_place = otp_leg.get("from") or {}
