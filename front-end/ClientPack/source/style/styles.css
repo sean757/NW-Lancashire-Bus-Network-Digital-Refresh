@@ -903,5 +903,5 @@ body.high-contrast .input-group select {
     pointer-events: none;
     white-space: nowrap;
     margin-bottom: 10px;
-    margin-left: 10px;
+    margin-right: 10px;
 }

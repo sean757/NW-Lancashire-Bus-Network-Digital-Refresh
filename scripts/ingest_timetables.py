@@ -29,10 +29,10 @@ OPERATORS = ["ARCT", "BLAC", "KLCO", "SCCU", "SCMY", "NUTT"]
 # TransXChange namespace
 NS = {'txc': 'http://www.transxchange.org.uk/'}
 
-# Approximate bounding box for North West Lancashire (used to validate stop
-# coordinates loaded from the database before using them for route geometry).
+# Approximate bounding box for North West Lancashire / Cumbria.
+# Extended westward to -3.7 to cover the full SCCU service area.
 _LAT_MIN, _LAT_MAX = 53.0, 55.0
-_LON_MIN, _LON_MAX = -3.5, -2.0
+_LON_MIN, _LON_MAX = -3.7, -2.0
 
 
 def _sanitize_stop_ref(stop_ref):
@@ -414,18 +414,24 @@ def parse_txc_xml(conn, xml_content, operator_code, valid_stops, stop_coords):
 
 
 def download_and_extract(conn, zip_url, operator_code, valid_stops, stop_coords):
-    """Download ZIP and process contained XML files."""
-    log.info("Downloading ZIP from: %s", zip_url)
+    """Download a ZIP or XML file and process any TransXChange XML content."""
+    log.info("Downloading from: %s", zip_url)
     try:
         response = requests.get(zip_url, verify=False, timeout=30)
-        with zipfile.ZipFile(io.BytesIO(response.content)) as z:
-            # Process every XML file inside the ZIP
-            xml_files = [f for f in z.namelist() if f.endswith('.xml')]
-            log.info("Found %d XML files", len(xml_files))
-            for filename in xml_files:
-                parse_txc_xml(conn, z.read(filename), operator_code, valid_stops, stop_coords)
+        content = response.content
+        # Attempt to process as a ZIP archive first; fall back to raw XML.
+        try:
+            with zipfile.ZipFile(io.BytesIO(content)) as z:
+                xml_files = [f for f in z.namelist() if f.lower().endswith('.xml')]
+                log.info("Found %d XML files in ZIP", len(xml_files))
+                for filename in xml_files:
+                    parse_txc_xml(conn, z.read(filename), operator_code, valid_stops, stop_coords)
+        except zipfile.BadZipFile:
+            # Not a ZIP — treat the downloaded content as raw TransXChange XML.
+            log.info("Response is not a ZIP; attempting to parse as raw XML.")
+            parse_txc_xml(conn, content, operator_code, valid_stops, stop_coords)
     except Exception as e:
-        log.error("Error processing ZIP: %s", e)
+        log.error("Error processing %s: %s", zip_url, e)
 
 
 def run_ingestion():
@@ -471,7 +477,7 @@ def run_ingestion():
                 zip_url = item.get('url')
                 ext = item.get('extension')
 
-                if zip_url and ext == "zip":
+                if zip_url and (ext or "").lower() in ("zip", "xml"):
                     download_and_extract(conn, zip_url, operator, valid_stops, stop_coords)
 
         conn.close()
