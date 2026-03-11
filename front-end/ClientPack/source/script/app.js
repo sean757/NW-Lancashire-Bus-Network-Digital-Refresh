@@ -542,6 +542,17 @@ document.addEventListener('DOMContentLoaded', () => {
     loadAccessibilitySettings();
     loadLanguageSettings();
     initializeLeafletMap();
+
+    // Set datetime-local input constraint: max = now + 7 days
+    const dtInput = document.getElementById('departureTime');
+    if (dtInput) {
+        const maxDate = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+        // Format as YYYY-MM-DDTHH:MM (datetime-local format)
+        const pad = n => String(n).padStart(2, '0');
+        const toLocalDTString = d =>
+            `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+        dtInput.max = toLocalDTString(maxDate);
+    }
 });
 
 
@@ -907,7 +918,7 @@ const translations = {
         bus: 'Bus',
         walk: 'Walk',
         viewOnMap: '🗺️ View on Map',
-        departureTime: 'Departure Time:',
+        departureTime: 'Departure Date & Time:',
         noJourneys: 'No journeys found for the selected points.',
         selectValidPoints: 'Please select valid start and end points (use the suggestions or click a suggestion).',
         planningRoute: 'Planning route…',
@@ -947,7 +958,7 @@ const translations = {
         bus: '公交',
         walk: '步行',
         viewOnMap: '🗺️ 在地图上查看',
-        departureTime: '出发时间：',
+        departureTime: '出发日期和时间：',
         noJourneys: '未找到符合所选起点和终点的路线。',
         selectValidPoints: '请选择有效的起点和终点（请使用建议列表或点击建议项）。',
         planningRoute: '正在规划路线…',
@@ -1331,8 +1342,20 @@ async function drawJourneyOnMap(journey) {
     }
 }
 
-function renderJourneyList(journeys) {
+function renderJourneyList(journeys, departureDate) {
     const t = translations[currentLang] || translations.en;
+
+    // Format departure date as a human-readable label (e.g. "Tuesday 11 Mar")
+    let departureDayLabel = '';
+    if (departureDate) {
+        // departureDate is "YYYY-MM-DD"; parse as local date to avoid UTC offset issues
+        const [year, month, day] = departureDate.split('-').map(Number);
+        const dateObj = new Date(year, month - 1, day);
+        departureDayLabel = dateObj.toLocaleDateString(
+            currentLang === 'zh' ? 'zh-CN' : 'en-GB',
+            { weekday: 'long', day: 'numeric', month: 'short' }
+        );
+    }
     if (!journeys || journeys.length === 0) {
         routeContent.innerHTML = `<p style="color: #e74c3c;">${t.noJourneys}</p>`;
         clearRouteLayers();
@@ -1407,7 +1430,10 @@ function renderJourneyList(journeys) {
         // Extract departure time ONLY from first leg, arrival time ONLY from last leg
         const depText = firstLeg && firstLeg.departure_time || '';
         const arrText = lastLeg && lastLeg.arrival_time || '';
-        times.innerHTML = `<div style="margin-bottom:0.35em;"><span style="display:inline-block;font-weight:800;color:#1e8449;font-size:0.95em;text-transform:uppercase;letter-spacing:0.03em;">${t.departs}</span><div style="font-size:1.5em;font-weight:800;color:#1e8449;margin-top:0.1em;line-height:1.2;">${depText}</div></div><div style="margin-top:0.6em;"><span style="display:inline-block;font-weight:800;color:#c0392b;font-size:0.95em;text-transform:uppercase;letter-spacing:0.03em;">${t.arrives}</span><div style="font-size:1.5em;font-weight:800;color:#c0392b;margin-top:0.1em;line-height:1.2;">${arrText}</div></div>`;
+        const dayHtml = departureDayLabel
+            ? `<div style="font-size:0.82em;color:#555;margin-bottom:0.2em;font-weight:600;">${departureDayLabel}</div>`
+            : '';
+        times.innerHTML = `${dayHtml}<div style="margin-bottom:0.35em;"><span style="display:inline-block;font-weight:800;color:#1e8449;font-size:0.95em;text-transform:uppercase;letter-spacing:0.03em;">${t.departs}</span><div style="font-size:1.5em;font-weight:800;color:#1e8449;margin-top:0.1em;line-height:1.2;">${depText}</div></div><div style="margin-top:0.6em;"><span style="display:inline-block;font-weight:800;color:#c0392b;font-size:0.95em;text-transform:uppercase;letter-spacing:0.03em;">${t.arrives}</span><div style="font-size:1.5em;font-weight:800;color:#c0392b;margin-top:0.1em;line-height:1.2;">${arrText}</div></div>`;
 
         header.appendChild(summary);
         header.appendChild(times);
@@ -1528,11 +1554,18 @@ planRouteBtn.addEventListener('click', async () => {
         if (parts.length === 2) { body.destination_lat = parseFloat(parts[0]); body.destination_lon = parseFloat(parts[1]); }
     }
 
-    // Add optional params (not presently used by backend but kept for future)
+    // Add request parameters
     body.preference = pathfinding;
     body.walking_speed = walkingSpeed;
     if (departureTimeInput) {
-        body.departure_time = departureTimeInput;
+        // datetime-local value is "YYYY-MM-DDTHH:MM" — split into date and time
+        const tIdx = departureTimeInput.indexOf('T');
+        if (tIdx !== -1) {
+            body.departure_date = departureTimeInput.slice(0, tIdx);
+            body.departure_time = departureTimeInput.slice(tIdx + 1);
+        } else {
+            body.departure_time = departureTimeInput;
+        }
     }
 
     // Basic validation
@@ -1556,7 +1589,7 @@ planRouteBtn.addEventListener('click', async () => {
         const data = await res.json();
         // DEBUG console.log('Journey response received:', JSON.stringify(data, null, 2));
         // data.journeys is an array
-        renderJourneyList(data.journeys || []);
+        renderJourneyList(data.journeys || [], data.departure_date || null);
         // Auto-collapse planner
         const routePlanner = document.querySelector('.route-planner');
         const plannerToggle = document.getElementById('plannerToggle');
