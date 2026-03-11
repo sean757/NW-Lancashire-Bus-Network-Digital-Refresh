@@ -5,7 +5,7 @@ Plans journeys via the OTP v2 GraphQL endpoint and translates OTP's response
 format into the application's own leg/journey representation.
 
 Configuration (app/config.py / .env):
-  OTP_URL     Base URL of the OTP server   (default: http://localhost:8080)
+  OTP_URL     Base URL of the OTP server   (default: http://localhost:9090)
   OTP_ROUTER  Router name for OTP v1 REST fallback (default: default)
 
 OTP v2 GraphQL endpoint used by default:
@@ -64,14 +64,12 @@ query PlanJourney(
           lat
           lon
           stop { gtfsId }
-          departure
         }
         to {
           name
           lat
           lon
           stop { gtfsId }
-          arrival
         }
         route {
           gtfsId
@@ -185,9 +183,12 @@ def _parse_legs(otp_legs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 direction_id = 0
             direction = "inbound" if direction_id == 1 else "outbound"
 
-            # Times: prefer stop-level timestamps, fall back to leg-level
-            dep_ms = from_place.get("departure") or otp_leg.get("startTime") or 0
-            arr_ms = to_place.get("arrival") or otp_leg.get("endTime") or 0
+            # Times: use leg-level epoch-ms timestamps (Long in OTP v2,
+            # int in v1).  In OTP 2.4+, Place.departure/arrival became LegTime
+            # objects — using the leg-level startTime/endTime avoids that
+            # schema change entirely.
+            dep_ms = otp_leg.get("startTime") or 0
+            arr_ms = otp_leg.get("endTime") or 0
 
             legs.append({
                 "mode": "bus",

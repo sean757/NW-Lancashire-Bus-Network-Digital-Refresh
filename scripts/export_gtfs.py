@@ -71,6 +71,12 @@ ROUTE_TYPE_BUS = 3
 AGENCY_URL = "https://www.lancashire.gov.uk/"
 AGENCY_TIMEZONE = "Europe/London"
 
+# Feed publisher metadata for feed_info.txt
+FEED_PUBLISHER_NAME = "SCC200 Transport"
+FEED_PUBLISHER_URL = "https://www.lancashire.gov.uk/"
+FEED_LANG = "en"
+FEED_ID = "scc200"
+
 
 # ---------------------------------------------------------------------------
 # Sanitisation helpers
@@ -178,6 +184,20 @@ def make_service_id(bitmask: int, start: Any, end: Any) -> str:
 # ---------------------------------------------------------------------------
 # Database queries
 # ---------------------------------------------------------------------------
+
+def build_feed_info() -> List[Dict[str, str]]:
+    """Return a single feed_info.txt row for OTP feed identification."""
+    return [
+        {
+            "feed_publisher_name": FEED_PUBLISHER_NAME,
+            "feed_publisher_url": FEED_PUBLISHER_URL,
+            "feed_lang": FEED_LANG,
+            "feed_id": FEED_ID,
+            "feed_start_date": gtfs_date(DEFAULT_START_DATE),
+            "feed_end_date": gtfs_date(DEFAULT_END_DATE),
+        }
+    ]
+
 
 def fetch_agencies(conn) -> List[Dict[str, str]]:
     """Return one agency row per distinct operator in the routes table."""
@@ -442,6 +462,7 @@ def export_gtfs(output_path: str = "gtfs_export.zip") -> None:
         write_gtfs_zip(
             output_path,
             {
+                "feed_info.txt":  build_feed_info(),
                 "agency.txt":     agencies,
                 "stops.txt":      stops,
                 "routes.txt":     routes,
