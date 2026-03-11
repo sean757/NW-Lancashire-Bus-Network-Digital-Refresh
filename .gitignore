@@ -16,7 +16,6 @@ env/
 pip-wheel-metadata/
 
 # GTFS export artefacts
-gtfs_export.zip
 gtfs_output/
 
 # OS / editor
