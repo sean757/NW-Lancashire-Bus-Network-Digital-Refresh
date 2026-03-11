@@ -56,9 +56,12 @@ DB_CONFIG: Dict[str, Any] = {
     "dbname": os.environ.get("DB_NAME", "transport_db"),
 }
 
-# Approximate bounding box for North West Lancashire
+# Approximate bounding box for North West Lancashire / Cumbria
+# Extended westward to -3.7 to cover the full SCCU (Stagecoach Cumbria &
+# North Lancashire) service area, including stops near Whitehaven and
+# Workington that lie slightly west of the original -3.5 limit.
 LAT_MIN, LAT_MAX = 53.0, 55.0
-LON_MIN, LON_MAX = -3.5, -2.0
+LON_MIN, LON_MAX = -3.7, -2.0
 
 # Fallback service date window when valid_from/valid_until is NULL
 DEFAULT_START_DATE: date = date.today()
