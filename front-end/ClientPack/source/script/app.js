@@ -1202,13 +1202,20 @@ async function drawJourneyOnMap(journey) {
             const popupB = `<div><strong>${leg.destination_stop_name || leg.to_stop || leg.destination_stop_id || ''}</strong>${leg.arrival_time ? `<div style="color:#E74C3C;font-weight:600;">Arr: ${leg.arrival_time}</div>` : ''}</div>`;
             L.circleMarker(b, { radius: 6, color: legColor, fillColor: '#fff', weight: 2 }).addTo(routeLayerGroup).bindPopup(popupB);
         }
-        // Draw route for this (non-walking) leg: use stored waypoints when
-        // available, otherwise fall back to a straight line.
+        // Draw route for this (non-walking) leg.
+        // Prefer the geometry that OTP itself used for the planned trip
+        // (leg.otp_waypoints) to avoid mismatches with the route_waypoints
+        // table.  Fall back to the API-server waypoints, then a straight line.
         if (a && b) {
-            const waypoints = await fetchRouteWaypoints(
-                leg.route_id, leg.direction,
-                leg.origin_stop_id, leg.destination_stop_id
-            );
+            let waypoints = null;
+            if (leg.otp_waypoints && leg.otp_waypoints.length > 1) {
+                waypoints = leg.otp_waypoints;
+            } else {
+                waypoints = await fetchRouteWaypoints(
+                    leg.route_id, leg.direction,
+                    leg.origin_stop_id, leg.destination_stop_id
+                );
+            }
             if (waypoints && waypoints.length > 1) {
                 L.polyline(waypoints, { color: legColor, weight: 4, opacity: 0.85 }).addTo(routeLayerGroup);
             } else {

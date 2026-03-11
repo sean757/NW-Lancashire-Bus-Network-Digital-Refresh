@@ -239,7 +239,14 @@ def _parse_legs(otp_legs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             dep_ms = otp_leg.get("startTime") or 0
             arr_ms = otp_leg.get("endTime") or 0
 
-            legs.append({
+            # Extract OTP's own route geometry for this bus leg so the
+            # frontend can draw it accurately.  OTP returns the precise path
+            # for the trip it selected; this avoids mismatches when the
+            # route_waypoints table contains a different variant.
+            leg_geom = otp_leg.get("legGeometry") or {}
+            otp_waypoints = _decode_polyline(leg_geom.get("points") or "")
+
+            transit_leg: Dict[str, Any] = {
                 "mode": "bus",
                 "route_id": route_id,
                 "route_name": route_name,
@@ -251,7 +258,10 @@ def _parse_legs(otp_legs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 "destination_stop_name": to_place.get("name", ""),
                 "departure_time": _ms_to_time_str(dep_ms),
                 "arrival_time": _ms_to_time_str(arr_ms),
-            })
+            }
+            if otp_waypoints:
+                transit_leg["otp_waypoints"] = otp_waypoints
+            legs.append(transit_leg)
 
     return legs
 
