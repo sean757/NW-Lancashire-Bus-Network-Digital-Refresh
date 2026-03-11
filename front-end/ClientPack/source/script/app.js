@@ -79,6 +79,20 @@ function extractLatLng(item) {
     return [la, lo];
 }
 
+/**
+ * Create a lightweight location item from a Leaflet LatLng object (map click).
+ * The returned object is compatible with extractLatLng / getLabelFromItem / addStartMarker / addEndMarker.
+ */
+function makeCustomItem(latlng) {
+    const lat = latlng.lat.toFixed(5);
+    const lon = latlng.lng.toFixed(5);
+    return {
+        lat: latlng.lat,
+        lon: latlng.lng,
+        stop_name: `${lat}, ${lon}`,
+    };
+}
+
 function addStartMarker(item) {
     const coords = extractLatLng(item);
     selectedStartItem = item;
@@ -133,6 +147,23 @@ function showNotification(message) {
     setTimeout(() => {
         toast.classList.remove('show');
     }, 3000);
+}
+
+/**
+ * Update the map click hint control text to reflect what the next click will do.
+ * Called after each map click and after adding/clearing markers.
+ */
+function updateMapClickHint() {
+    const hint = document.getElementById('mapClickHint');
+    if (!hint) return;
+    const t = translations[currentLang] || translations.en;
+    if (!selectedStartItem && !selectedEndItem) {
+        hint.textContent = t.clickHintStart;
+    } else if (selectedStartItem && !selectedEndItem) {
+        hint.textContent = t.clickHintEnd;
+    } else {
+        hint.textContent = t.clickHintReset;
+    }
 }
 
 // Map / state variables
@@ -580,6 +611,51 @@ function initializeLeafletMap() {
         }, 300);
     });
     updateZoomHint();
+
+    // Map click hint control – shows what the next map click will do
+    const clickHintControl = L.control({ position: 'bottomleft' });
+    clickHintControl.onAdd = function () {
+        const div = L.DomUtil.create('div', 'map-click-hint');
+        div.setAttribute('aria-live', 'polite');
+        div.id = 'mapClickHint';
+        return div;
+    };
+    clickHintControl.addTo(map);
+    updateMapClickHint();
+
+    // Handle map clicks for start / end point selection.
+    // 1st click  → set start point
+    // 2nd click  → set end point
+    // 3rd+ click → reset start (clear existing end) so the user can pick a new route
+    map.on('click', (e) => {
+        const item = makeCustomItem(e.latlng);
+        const label = getLabelFromItem(item);
+        const t = translations[currentLang] || translations.en;
+        if (!selectedStartItem) {
+            if (fromInputTimer) { clearTimeout(fromInputTimer); fromInputTimer = null; }
+            fromInput.value = label;
+            clearFromSuggestions();
+            addStartMarker(item);
+            showNotification(t.mapClickNotifyStart);
+        } else if (!selectedEndItem) {
+            if (toInputTimer) { clearTimeout(toInputTimer); toInputTimer = null; }
+            toInput.value = label;
+            clearToSuggestions();
+            addEndMarker(item);
+            showNotification(t.mapClickNotifyEnd);
+        } else {
+            // Both already set — update start and clear end so the user can pick a new route
+            if (fromInputTimer) { clearTimeout(fromInputTimer); fromInputTimer = null; }
+            selectedEndItem = null;
+            toInput.value = '';
+            if (endMarker) { map.removeLayer(endMarker); endMarker = null; }
+            fromInput.value = label;
+            clearFromSuggestions();
+            addStartMarker(item);
+            showNotification(t.mapClickNotifyReset);
+        }
+        updateMapClickHint();
+    });
 }
 
 /**
@@ -668,6 +744,7 @@ async function updateBusStopMarkers() {
             addStartMarker(stop);
             marker.closePopup();
             showNotification(`Start point set to: ${label}`);
+            updateMapClickHint();
         });
 
         const setEndBtn = document.createElement('button');
@@ -679,6 +756,7 @@ async function updateBusStopMarkers() {
             addEndMarker(stop);
             marker.closePopup();
             showNotification(`End point set to: ${label}`);
+            updateMapClickHint();
         });
 
         btnGroup.appendChild(setStartBtn);
@@ -686,6 +764,13 @@ async function updateBusStopMarkers() {
         popupEl.appendChild(btnGroup);
 
         marker.bindPopup(popupEl, { maxWidth: 220 });
+
+        // Prevent the bus-stop marker click from also triggering the map click handler
+        // (which would set start/end to the map coordinate rather than the stop).
+        marker.on('click', (e) => {
+            L.DomEvent.stopPropagation(e.originalEvent);
+        });
+
         busStopLayerGroup.addLayer(marker);
     });
 }
@@ -827,7 +912,13 @@ const translations = {
         selectValidPoints: 'Please select valid start and end points (use the suggestions or click a suggestion).',
         planningRoute: 'Planning route…',
         routePlanningError: 'Error planning route',
-        routePlanningFailed: 'Failed to plan route. See console for details.'
+        routePlanningFailed: 'Failed to plan route. See console for details.',
+        clickHintStart: '🖱️ Click the map to set your start point',
+        clickHintEnd: '🖱️ Click the map to set your end point',
+        clickHintReset: '🖱️ Click the map to change your start point',
+        mapClickNotifyStart: 'Start point set. Now click your destination on the map.',
+        mapClickNotifyEnd: "End point set. Click 'Plan Route' to continue.",
+        mapClickNotifyReset: 'Start point updated. Now click your destination on the map.'
     },
     zh: {
         header: '兰开夏郡旅程规划',
@@ -861,7 +952,13 @@ const translations = {
         selectValidPoints: '请选择有效的起点和终点（请使用建议列表或点击建议项）。',
         planningRoute: '正在规划路线…',
         routePlanningError: '路线规划出错',
-        routePlanningFailed: '路线规划失败。请查看控制台了解详情。'
+        routePlanningFailed: '路线规划失败。请查看控制台了解详情。',
+        clickHintStart: '🖱️ 点击地图设置起点',
+        clickHintEnd: '🖱️ 点击地图设置终点',
+        clickHintReset: '🖱️ 点击地图更改起点',
+        mapClickNotifyStart: '起点已设置。请在地图上点击目的地。',
+        mapClickNotifyEnd: '终点已设置。点击"规划路线"继续。',
+        mapClickNotifyReset: '起点已更新。请在地图上点击目的地。'
     }
 };
 
