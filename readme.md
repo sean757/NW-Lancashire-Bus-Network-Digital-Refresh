@@ -163,7 +163,7 @@ curl -X POST http://localhost:8080/api/v1/journey/plan \
 
 | Variable     | Default               | Description                              |
 |--------------|-----------------------|------------------------------------------|
-| `OTP_URL`    | `http://localhost:8080` | Base URL of the OTP server             |
+| `OTP_URL`    | `http://localhost:9090` | Base URL of the OTP server             |
 | `OTP_ROUTER` | `default`             | OTP router name (v1 REST fallback only)  |
 | `DB_HOST`    | `localhost`           | PostgreSQL host                          |
 | `DB_PORT`    | `5432`                | PostgreSQL port                          |
@@ -248,6 +248,129 @@ Run these inside the devcontainer **after** running `init_db.sql`:
 | `python -u scripts/ingest_timetables.py` | Import timetable data (with data sanitisation) |
 | `python -u scripts/ingest_live_all.py` | Poll live bus positions (runs continuously, Ctrl+C to stop) |
 | `python -u scripts/export_gtfs.py [output.zip]` | Export sanitised GTFS ZIP for OpenTripPlanner |
+| `python -u scripts/test_otp.py [--url http://localhost:9090]` | Standalone OTP connectivity and routing test |
+
+## Debugging OTP in Isolation
+
+Before coupling OTP to the FastAPI backend and front-end, it is worth
+verifying OTP itself in isolation.  This simplifies diagnosing routing
+problems because you only have one moving part.
+
+### Standalone OTP diagnostic script
+
+The `scripts/test_otp.py` script checks four things without needing the
+database or FastAPI server to be running:
+
+1. **Server reachability** — confirms OTP is up.
+2. **Feed metadata** — lists every GTFS feed OTP has loaded.
+3. **Route inventory** — lists all transit routes OTP knows about.
+4. **Journey planning** — plans a sample Lancaster city-centre journey and
+   prints each itinerary.
+
+```bash
+# With OTP running on port 9090:
+python scripts/test_otp.py
+
+# Against a remote or non-default port:
+python scripts/test_otp.py --url http://localhost:9090
+
+# Custom origin/destination for the sample journey:
+python scripts/test_otp.py --from-lat 54.0479 --from-lon -2.7996 \
+                            --to-lat   54.0476 --to-lon   -2.8017
+```
+
+If **Check 3 (Route inventory)** shows no routes, or **Check 4** returns only
+walking itineraries, the GTFS data is the most likely cause — see
+**Troubleshooting GTFS data** below.
+
+### OTP debug web interface
+
+OTP ships with a built-in debug map accessible at the root of the server:
+
+```
+http://localhost:9090/
+```
+
+From this page you can:
+
+- **Overlay all loaded routes** — click the **"Overlay transit routes"**
+  toggle (hamburger menu → Layers → Transit Routes).  Every route polyline
+  will appear on the map.  If the map is empty this confirms no transit data
+  was loaded.
+- **Show stops** — enable the "Stops" layer to see every stop OTP knows about.
+  Hover over a stop to view its `gtfsId` (which must match the `stop_id` in
+  your GTFS export).
+- **Interactive routing** — click anywhere on the map to set an origin, then
+  Shift-click to set a destination.  OTP plans a journey and draws the
+  itinerary on the map.  This is the quickest way to check whether a
+  particular pair of stops can be routed between.
+- **GraphiQL API explorer** — navigate to `http://localhost:9090/graphiql` to
+  run raw GraphQL queries against OTP's planning API.  Useful queries:
+
+  ```graphql
+  # List all routes
+  { routes { shortName longName agency { name } } }
+
+  # List all stops
+  { stops { gtfsId name lat lon } }
+
+  # Plan a specific journey
+  {
+    plan(
+      from: { lat: 54.0479, lon: -2.7996 }
+      to:   { lat: 54.0476, lon: -2.8017 }
+      date: "2026-03-11"
+      time: "08:30:00"
+      transportModes: [{ mode: TRANSIT }, { mode: WALK }]
+    ) {
+      itineraries {
+        duration
+        legs { mode from { name } to { name } route { shortName } }
+      }
+    }
+  }
+  ```
+
+### Troubleshooting GTFS data
+
+If OTP loads no routes, or routes are missing, work through this checklist:
+
+1. **Re-run ingestion** after pulling the latest code (the trip_id bug-fix
+   requires fresh data):
+   ```bash
+   python -u scripts/ingest_stops.py
+   python -u scripts/ingest_timetables.py
+   python -u scripts/export_gtfs.py otp-data/gtfs_export.zip
+   ```
+
+2. **Rebuild the OTP graph** after updating the GTFS ZIP:
+   ```bash
+   java -Xmx4G -jar otp-*.jar --build --save otp-data
+   ```
+
+3. **Check the OTP build log** for warnings.  Common messages and their
+   meanings:
+
+   | Message | Cause |
+   |---------|-------|
+   | `Filtered out N trips` | Trips have no valid stop_times (fewer than 2 stops) |
+   | `Service period X has no active dates` | Calendar date range doesn't cover today |
+   | `Stop X not found` | Stop ID in stop_times.txt has no entry in stops.txt |
+   | `Graph contains 0 transit routes` | The entire GTFS feed was rejected |
+
+4. **Verify the GTFS ZIP** contains all required files:
+   ```bash
+   unzip -l otp-data/gtfs_export.zip
+   # Should show: feed_info.txt, agency.txt, stops.txt, routes.txt,
+   #              trips.txt, stop_times.txt, calendar.txt
+   ```
+
+5. **Check stop coordinates** — all stops must fall within the bounding box
+   of the OSM extract you built the graph with.  For NW Lancashire this means
+   approximately 53°–55°N, 3.5°–2°W.
+
+6. **Check the graph.obj** for errors by running OTP with `--loadStreet` and
+   examining stdout for lines containing `WARN` or `ERROR`.
 
 ## Daily Workflow
 
