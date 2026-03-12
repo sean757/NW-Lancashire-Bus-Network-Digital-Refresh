@@ -399,12 +399,16 @@ body {
     top: 20px;
     right: 20px;
     width: 320px;
-    max-height: 400px;
+    min-width: 260px;
+    min-height: 160px;
+    max-width: min(96vw, 1200px);
+    max-height: calc(100% - 40px);
     background-color: var(--white);
     border-radius: 8px;
     box-shadow: 0 4px 12px var(--shadow);
     padding: 20px;
     overflow-y: auto;
+    resize: both;
     z-index: 500;
 }
 
@@ -414,6 +418,35 @@ body {
     font-size: 1.125em;
     border-bottom: 2px solid var(--secondary-color);
     padding-bottom: 10px;
+    cursor: move;
+    user-select: none;
+    touch-action: none;
+}
+
+body.route-panel-dragging {
+    user-select: none;
+}
+
+body.route-panel-resizing {
+    user-select: none;
+}
+
+.route-display-resizer {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    width: 26px;
+    height: 26px;
+    cursor: nwse-resize;
+    touch-action: none;
+    z-index: 2;
+    background: linear-gradient(135deg,
+            transparent 0 35%,
+            rgba(16, 35, 69, 0.25) 35% 45%,
+            transparent 45% 60%,
+            rgba(16, 35, 69, 0.35) 60% 70%,
+            transparent 70%);
+    border-bottom-right-radius: 8px;
 }
 
 .route-content {
@@ -508,6 +541,17 @@ body {
     width: 20px;
     height: 20px;
     cursor: pointer;
+}
+
+.settings-checkbox-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.settings-checkbox-row label {
+    margin-bottom: 0;
 }
 
 .save-settings-btn {
@@ -781,9 +825,16 @@ body.high-contrast .input-group select {
     }
 
     .weather-widget {
-        width: 150px;
-        padding: 15px;
-        bottom: 100px;
+        width: 120px;
+        padding: 8px;
+        bottom: 12px;
+        right: 12px;
+        left: auto;
+    }
+
+    .weather-icon {
+        width: 36px;
+        height: 36px;
     }
 
 
@@ -805,9 +856,16 @@ body.high-contrast .input-group select {
     }
 
     .weather-widget {
-        width: calc(100% - 40px);
-        left: 20px;
-        bottom: 20px;
+        width: 108px;
+        padding: 6px;
+        bottom: 110px;
+        right: 10px;
+        left: auto;
+    }
+
+    .weather-icon {
+        width: 30px;
+        height: 30px;
     }
 
 
@@ -969,6 +1027,25 @@ body.high-contrast .input-group select {
     white-space: nowrap;
     margin-bottom: 10px;
     margin-right: 10px;
+}
+
+body.hide-map-hints .bus-stop-zoom-hint,
+body.hide-map-hints .map-click-hint {
+    display: none !important;
+}
+
+/* Night-time map tint */
+body.map-night-mode #map .leaflet-tile-pane {
+    filter: brightness(0.42) saturate(0.8) contrast(1.05) hue-rotate(180deg);
+}
+
+body.map-night-mode #map .leaflet-control-attribution {
+    background: rgba(0, 0, 0, 0.45);
+    color: #d0d0d0;
+}
+
+body.map-night-mode #map .leaflet-control-attribution a {
+    color: #f0f0f0;
 }
 
 /* ── Journey List / Cards ─────────────────────────────────────────────────── */

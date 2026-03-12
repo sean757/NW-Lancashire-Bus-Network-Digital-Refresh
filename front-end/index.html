@@ -25,6 +25,7 @@
             <li><a href="#" class="active">Home</a></li>
             <li><a href="#" id="accessibilityLink">Accessibility Settings</a></li>
             <li><a href="#" id="languageLink">Languages</a></li>
+            <li><a href="#" id="settingsLink">Settings</a></li>
             <li><a href="#" id="reportBugLink">Report Bug</a></li>
         </ul>
     </nav>
@@ -181,6 +182,34 @@
                     </select>
                 </div>
                 <button class="save-settings-btn" id="saveLanguage">Apply / 应用</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- App Settings Modal -->
+    <div class="modal" id="settingsModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Settings</h2>
+                <button class="close-btn" id="closeSettingsModal" aria-label="Close settings">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="setting-group settings-checkbox-row">
+                    <label for="settingsShowWeather">Show weather icon</label>
+                    <input type="checkbox" id="settingsShowWeather" checked>
+                </div>
+
+                <div class="setting-group settings-checkbox-row">
+                    <label for="settingsShowMapHints">Show map helper pop-ups</label>
+                    <input type="checkbox" id="settingsShowMapHints" checked>
+                </div>
+
+                <div class="setting-group settings-checkbox-row">
+                    <label for="settingsDarkMap">Dark mode map tint</label>
+                    <input type="checkbox" id="settingsDarkMap">
+                </div>
+
+                <button class="save-settings-btn" id="saveUiSettings">Save Settings</button>
             </div>
         </div>
     </div>

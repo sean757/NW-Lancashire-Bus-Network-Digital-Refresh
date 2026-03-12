@@ -156,6 +156,11 @@ function showNotification(message) {
 function updateMapClickHint() {
     const hint = document.getElementById('mapClickHint');
     if (!hint) return;
+    if (!uiSettings.showMapHints) {
+        hint.style.display = 'none';
+        return;
+    }
+    hint.style.display = 'block';
     const t = translations[currentLang] || translations.en;
     if (!selectedStartItem && !selectedEndItem) {
         hint.textContent = t.clickHintStart;
@@ -533,6 +538,7 @@ toInput.addEventListener('input', () => {
 // Initialize map and click handlers
 document.addEventListener('DOMContentLoaded', () => {
     loadAccessibilitySettings();
+    loadUiSettings();
     initializeLeafletMap();
     initializePlannerToggle();
 });
@@ -541,6 +547,7 @@ document.addEventListener('DOMContentLoaded', () => {
 document.addEventListener('DOMContentLoaded', () => {
     loadAccessibilitySettings();
     loadLanguageSettings();
+    loadUiSettings();
     initializeLeafletMap();
 
     // Set datetime-local input constraint: max = now + 7 days
@@ -593,7 +600,7 @@ function initializeLeafletMap() {
     }
 
     // Zoom hint control – tells the user to zoom in to see/select bus stops
-    const zoomHint = L.control({ position: 'bottomleft' });
+    const zoomHint = L.control({ position: 'bottomright' });
     zoomHint.onAdd = function () {
         const div = L.DomUtil.create('div', 'bus-stop-zoom-hint');
         div.setAttribute('aria-live', 'polite');
@@ -605,6 +612,10 @@ function initializeLeafletMap() {
     function updateZoomHint() {
         const hint = document.querySelector('.bus-stop-zoom-hint');
         if (!hint) return;
+        if (!uiSettings.showMapHints) {
+            hint.style.display = 'none';
+            return;
+        }
         if (map.getZoom() >= BUS_STOP_ZOOM_THRESHOLD) {
             hint.style.display = 'none';
         } else {
@@ -889,6 +900,56 @@ const languageModal = document.getElementById('languageModal');
 const closeLanguageModal = document.getElementById('closeLanguageModal');
 const saveLanguage = document.getElementById('saveLanguage');
 
+// App Settings Modal
+const settingsLink = document.getElementById('settingsLink');
+const settingsModal = document.getElementById('settingsModal');
+const closeSettingsModal = document.getElementById('closeSettingsModal');
+const saveUiSettingsBtn = document.getElementById('saveUiSettings');
+const settingsShowWeatherInput = document.getElementById('settingsShowWeather');
+const settingsShowMapHintsInput = document.getElementById('settingsShowMapHints');
+const settingsDarkMapInput = document.getElementById('settingsDarkMap');
+
+const defaultUiSettings = {
+    showWeather: true,
+    showMapHints: true,
+    darkMap: false,
+};
+
+let uiSettings = { ...defaultUiSettings };
+
+function applyUiSettings() {
+    const weatherWidget = document.getElementById('weatherWidget');
+    if (weatherWidget) {
+        weatherWidget.style.display = uiSettings.showWeather ? '' : 'none';
+    }
+
+    document.body.classList.toggle('hide-map-hints', !uiSettings.showMapHints);
+    document.body.classList.toggle('map-night-mode', !!uiSettings.darkMap);
+    updateMapClickHint();
+}
+
+function loadUiSettings() {
+    const raw = localStorage.getItem('ui_settings');
+    if (raw) {
+        try {
+            const parsed = JSON.parse(raw);
+            uiSettings = {
+                ...defaultUiSettings,
+                ...parsed,
+            };
+        } catch (err) {
+            uiSettings = { ...defaultUiSettings };
+        }
+    } else {
+        uiSettings = { ...defaultUiSettings };
+    }
+
+    if (settingsShowWeatherInput) settingsShowWeatherInput.checked = !!uiSettings.showWeather;
+    if (settingsShowMapHintsInput) settingsShowMapHintsInput.checked = !!uiSettings.showMapHints;
+    if (settingsDarkMapInput) settingsDarkMapInput.checked = !!uiSettings.darkMap;
+    applyUiSettings();
+}
+
 // Translation dictionary
 const translations = {
     en: {
@@ -912,7 +973,14 @@ const translations = {
         home: 'Home',
         accessibility: 'Accessibility Settings',
         languages: 'Languages',
+        settings: 'Settings',
         reportBug: 'Report Bug',
+        settingsTitle: 'Settings',
+        settingsShowWeather: 'Show weather icon',
+        settingsShowMapHints: 'Show map helper pop-ups',
+        settingsDarkMap: 'Dark mode map tint',
+        settingsSave: 'Save Settings',
+        settingsSaved: 'Settings updated successfully!',
         departs: 'DEPARTS',
         arrives: 'ARRIVES',
         bus: 'Bus',
@@ -955,7 +1023,14 @@ const translations = {
         home: '主页',
         accessibility: '无障碍设置',
         languages: '语言',
+        settings: '设置',
         reportBug: '报告错误',
+        settingsTitle: '设置',
+        settingsShowWeather: '显示天气图标',
+        settingsShowMapHints: '显示地图提示弹窗',
+        settingsDarkMap: '地图夜间深色',
+        settingsSave: '保存设置',
+        settingsSaved: '设置更新成功！',
         departs: '出发',
         arrives: '到达',
         bus: '公交',
@@ -1018,7 +1093,20 @@ function applyTranslations(lang) {
     document.querySelector('.sidebar-menu li:nth-child(1) a').textContent = t.home;
     document.querySelector('#accessibilityLink').textContent = t.accessibility;
     document.querySelector('#languageLink').textContent = t.languages;
+    document.querySelector('#settingsLink').textContent = t.settings;
     document.querySelector('#reportBugLink').textContent = t.reportBug;
+
+    // Settings modal
+    const settingsTitle = document.querySelector('#settingsModal .modal-header h2');
+    if (settingsTitle) settingsTitle.textContent = t.settingsTitle;
+    const weatherLabel = document.querySelector('label[for="settingsShowWeather"]');
+    if (weatherLabel) weatherLabel.textContent = t.settingsShowWeather;
+    const hintsLabel = document.querySelector('label[for="settingsShowMapHints"]');
+    if (hintsLabel) hintsLabel.textContent = t.settingsShowMapHints;
+    const darkMapLabel = document.querySelector('label[for="settingsDarkMap"]');
+    if (darkMapLabel) darkMapLabel.textContent = t.settingsDarkMap;
+    const settingsSaveBtn = document.getElementById('saveUiSettings');
+    if (settingsSaveBtn) settingsSaveBtn.textContent = t.settingsSave;
 
     currentLang = lang;
 }
@@ -1046,6 +1134,36 @@ saveLanguage.addEventListener('click', () => {
     localStorage.setItem('language', selectedLang);
     languageModal.classList.remove('active');
     showNotification(selectedLang === 'en' ? 'Language updated successfully!' : '语言更新成功！');
+});
+
+settingsLink.addEventListener('click', (e) => {
+    e.preventDefault();
+    settingsShowWeatherInput.checked = !!uiSettings.showWeather;
+    settingsShowMapHintsInput.checked = !!uiSettings.showMapHints;
+    if (settingsDarkMapInput) settingsDarkMapInput.checked = !!uiSettings.darkMap;
+    settingsModal.classList.add('active');
+    sidebar.classList.remove('active');
+});
+
+closeSettingsModal.addEventListener('click', () => {
+    settingsModal.classList.remove('active');
+});
+
+settingsModal.addEventListener('click', (e) => {
+    if (e.target === settingsModal) {
+        settingsModal.classList.remove('active');
+    }
+});
+
+saveUiSettingsBtn.addEventListener('click', () => {
+    uiSettings.showWeather = !!settingsShowWeatherInput.checked;
+    uiSettings.showMapHints = !!settingsShowMapHintsInput.checked;
+    uiSettings.darkMap = !!(settingsDarkMapInput && settingsDarkMapInput.checked);
+    localStorage.setItem('ui_settings', JSON.stringify(uiSettings));
+    applyUiSettings();
+    settingsModal.classList.remove('active');
+    const t = translations[currentLang] || translations.en;
+    showNotification(t.settingsSaved || 'Settings updated successfully!');
 });
 
 // Load saved language on page load
@@ -1108,8 +1226,184 @@ function loadAccessibilitySettings() {
 // Plan Route functionality
 const planRouteBtn = document.getElementById('planRouteBtn');
 const routeContent = document.getElementById('routeContent');
+const routeDisplay = document.getElementById('routeDisplay');
 // Layer group to hold drawn routes so we can clear them
 let routeLayerGroup = null;
+
+function initializeRouteDisplayInteractions() {
+    if (!routeDisplay) return;
+    const dragHandle = routeDisplay.querySelector('h3');
+    if (!dragHandle) return;
+
+    let resizer = routeDisplay.querySelector('.route-display-resizer');
+    if (!resizer) {
+        resizer = document.createElement('div');
+        resizer.className = 'route-display-resizer';
+        resizer.setAttribute('aria-hidden', 'true');
+        routeDisplay.appendChild(resizer);
+    }
+
+    let isDragging = false;
+    let isResizing = false;
+    let activePointerId = null;
+    let dragOffsetX = 0;
+    let dragOffsetY = 0;
+
+    let resizeStartX = 0;
+    let resizeStartY = 0;
+    let resizeStartWidth = 0;
+    let resizeStartHeight = 0;
+
+    const getPanelMinWidth = () => parseFloat(getComputedStyle(routeDisplay).minWidth) || 260;
+    const getPanelMinHeight = () => parseFloat(getComputedStyle(routeDisplay).minHeight) || 160;
+
+    const normalizePositionAnchor = () => {
+        const container = routeDisplay.parentElement;
+        if (!container) return;
+        const containerRect = container.getBoundingClientRect();
+        const panelRect = routeDisplay.getBoundingClientRect();
+        routeDisplay.style.left = (panelRect.left - containerRect.left) + 'px';
+        routeDisplay.style.top = (panelRect.top - containerRect.top) + 'px';
+        routeDisplay.style.right = 'auto';
+    };
+
+    const clampToContainer = () => {
+        const container = routeDisplay.parentElement;
+        if (!container) return;
+
+        const containerRect = container.getBoundingClientRect();
+        const panelRect = routeDisplay.getBoundingClientRect();
+
+        // If panel has not been moved yet (still right-anchored), skip clamping.
+        if (!routeDisplay.style.left && !routeDisplay.style.top) return;
+
+        const maxAllowedWidth = Math.max(getPanelMinWidth(), containerRect.width);
+        const maxAllowedHeight = Math.max(getPanelMinHeight(), containerRect.height);
+
+        const currentWidth = panelRect.width;
+        const currentHeight = panelRect.height;
+
+        if (currentWidth > maxAllowedWidth) {
+            routeDisplay.style.width = maxAllowedWidth + 'px';
+        }
+        if (currentHeight > maxAllowedHeight) {
+            routeDisplay.style.height = maxAllowedHeight + 'px';
+        }
+
+        const updatedRect = routeDisplay.getBoundingClientRect();
+        const maxLeft = Math.max(0, containerRect.width - updatedRect.width);
+        const maxTop = Math.max(0, containerRect.height - updatedRect.height);
+
+        const currentLeft = parseFloat(routeDisplay.style.left || '0');
+        const currentTop = parseFloat(routeDisplay.style.top || '0');
+
+        routeDisplay.style.left = Math.min(Math.max(0, currentLeft), maxLeft) + 'px';
+        routeDisplay.style.top = Math.min(Math.max(0, currentTop), maxTop) + 'px';
+    };
+
+    const onPointerMove = (e) => {
+        if (activePointerId !== null && e.pointerId !== activePointerId) return;
+        const container = routeDisplay.parentElement;
+        if (!container) return;
+
+        const containerRect = container.getBoundingClientRect();
+
+        if (isDragging) {
+            const panelRect = routeDisplay.getBoundingClientRect();
+
+            let left = e.clientX - containerRect.left - dragOffsetX;
+            let top = e.clientY - containerRect.top - dragOffsetY;
+
+            const maxLeft = Math.max(0, containerRect.width - panelRect.width);
+            const maxTop = Math.max(0, containerRect.height - panelRect.height);
+
+            left = Math.min(Math.max(0, left), maxLeft);
+            top = Math.min(Math.max(0, top), maxTop);
+
+            routeDisplay.style.left = left + 'px';
+            routeDisplay.style.top = top + 'px';
+            routeDisplay.style.right = 'auto';
+        }
+
+        if (isResizing) {
+            const leftPx = parseFloat(routeDisplay.style.left || '0');
+            const topPx = parseFloat(routeDisplay.style.top || '0');
+
+            const maxWidth = Math.max(getPanelMinWidth(), containerRect.width - leftPx);
+            const maxHeight = Math.max(getPanelMinHeight(), containerRect.height - topPx);
+
+            let nextWidth = resizeStartWidth + (e.clientX - resizeStartX);
+            let nextHeight = resizeStartHeight + (e.clientY - resizeStartY);
+
+            nextWidth = Math.min(Math.max(getPanelMinWidth(), nextWidth), maxWidth);
+            nextHeight = Math.min(Math.max(getPanelMinHeight(), nextHeight), maxHeight);
+
+            routeDisplay.style.width = nextWidth + 'px';
+            routeDisplay.style.height = nextHeight + 'px';
+        }
+    };
+
+    const onPointerUp = (e) => {
+        if (activePointerId !== null && e.pointerId !== activePointerId) return;
+        if (!isDragging && !isResizing) return;
+        isDragging = false;
+        isResizing = false;
+        activePointerId = null;
+        document.body.classList.remove('route-panel-dragging');
+        document.body.classList.remove('route-panel-resizing');
+        window.removeEventListener('pointermove', onPointerMove);
+        window.removeEventListener('pointerup', onPointerUp);
+        window.removeEventListener('pointercancel', onPointerUp);
+    };
+
+    dragHandle.addEventListener('pointerdown', (e) => {
+        // Primary pointer only
+        if (!e.isPrimary) return;
+        if (e.target === resizer) return;
+        normalizePositionAnchor();
+        clampToContainer();
+
+        isDragging = true;
+        activePointerId = e.pointerId;
+
+        const panelRect = routeDisplay.getBoundingClientRect();
+        dragOffsetX = e.clientX - panelRect.left;
+        dragOffsetY = e.clientY - panelRect.top;
+
+        document.body.classList.add('route-panel-dragging');
+        window.addEventListener('pointermove', onPointerMove);
+        window.addEventListener('pointerup', onPointerUp);
+        window.addEventListener('pointercancel', onPointerUp);
+        e.preventDefault();
+    });
+
+    resizer.addEventListener('pointerdown', (e) => {
+        if (!e.isPrimary) return;
+        normalizePositionAnchor();
+        clampToContainer();
+
+        isResizing = true;
+        activePointerId = e.pointerId;
+
+        const panelRect = routeDisplay.getBoundingClientRect();
+        resizeStartX = e.clientX;
+        resizeStartY = e.clientY;
+        resizeStartWidth = panelRect.width;
+        resizeStartHeight = panelRect.height;
+
+        document.body.classList.add('route-panel-resizing');
+        window.addEventListener('pointermove', onPointerMove);
+        window.addEventListener('pointerup', onPointerUp);
+        window.addEventListener('pointercancel', onPointerUp);
+        e.preventDefault();
+        e.stopPropagation();
+    });
+
+    // Keep panel visible if viewport/container changes while resized.
+    window.addEventListener('resize', clampToContainer);
+}
+
+initializeRouteDisplayInteractions();
 
 async function fetchStop(stop_id) {
     try {
@@ -1151,7 +1445,7 @@ async function fetchRouteWaypoints(routeId, direction, fromStop, toStop) {
     try {
         let url = `${apiUrl}/routes/${encodeURIComponent(routeId)}/waypoints?direction=${encodeURIComponent(direction || 'outbound')}`;
         if (fromStop) url += `&from_stop=${encodeURIComponent(fromStop)}`;
-        if (toStop)   url += `&to_stop=${encodeURIComponent(toStop)}`;
+        if (toStop) url += `&to_stop=${encodeURIComponent(toStop)}`;
         const res = await fetch(url);
         if (!res.ok) {
             waypointsCache[cacheKey] = null;
