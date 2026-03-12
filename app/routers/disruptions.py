@@ -8,6 +8,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 from app.database import get_db
 import httpx
+from lxml import etree
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -151,3 +155,70 @@ async def get_live_positions_from_db(
     result = await db.execute(text(query), params)
     rows = result.mappings().all()
     return [dict(row) for row in rows]
+
+
+# SIRI XML namespace
+_SIRI_NS = {'siri': 'http://www.siri.org.uk/siri'}
+
+
+@router.get("/live/vehicles")
+async def get_live_vehicles():
+    """Fetch and parse live bus positions from the SIRI feed for all operators.
+
+    Returns a list of vehicle dicts with vehicle_id, operator, line_ref,
+    line_name, latitude, longitude, and bearing.  This endpoint is the
+    recommended source for the frontend map because it returns structured JSON
+    without requiring the database ingest script to be running.
+    """
+    vehicles = []
+
+    async with httpx.AsyncClient(verify=False, timeout=10) as client:  # noqa: S501 – university SIRI endpoint uses a non-standard cert
+        for noc in OPERATORS:
+            url = f"https://transport.scc.lancs.ac.uk/bus/live/{noc}"
+            try:
+                response = await client.get(url)
+                if response.status_code != 200:
+                    continue
+
+                root = etree.fromstring(response.content)
+                activities = root.xpath('.//siri:VehicleActivity', namespaces=_SIRI_NS)
+
+                for activity in activities:
+                    journey = activity.find('.//siri:MonitoredVehicleJourney', namespaces=_SIRI_NS)
+                    if journey is None:
+                        continue
+
+                    vehicle_id = journey.findtext('siri:VehicleRef', namespaces=_SIRI_NS)
+                    lat = journey.findtext('.//siri:Latitude', namespaces=_SIRI_NS)
+                    lon = journey.findtext('.//siri:Longitude', namespaces=_SIRI_NS)
+
+                    if not (vehicle_id and lat and lon):
+                        continue
+
+                    bearing_raw = journey.findtext('siri:Bearing', namespaces=_SIRI_NS)
+                    line_ref = journey.findtext('siri:LineRef', namespaces=_SIRI_NS) or ''
+                    line_name = journey.findtext('siri:PublishedLineName', namespaces=_SIRI_NS) or line_ref
+
+                    try:
+                        bearing = float(bearing_raw) if bearing_raw else 0.0
+                    except ValueError:
+                        bearing = 0.0
+
+                    vehicles.append({
+                        'vehicle_id': vehicle_id,
+                        'operator': noc,
+                        'line_ref': line_ref,
+                        'line_name': line_name,
+                        'latitude': float(lat),
+                        'longitude': float(lon),
+                        'bearing': bearing,
+                    })
+
+            except (httpx.HTTPError, etree.XMLSyntaxError) as exc:
+                logger.warning("Failed to fetch/parse SIRI feed for operator %s: %s", noc, exc)
+                continue
+            except Exception as exc:  # pragma: no cover
+                logger.error("Unexpected error for operator %s: %s", noc, exc)
+                continue
+
+    return {'vehicles': vehicles}
