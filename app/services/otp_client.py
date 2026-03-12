@@ -36,7 +36,8 @@ query PlanJourney(
   $date: String!, $time: String!,
   $numItineraries: Int!,
   $walkSpeed: Float!,
-  $transferPenalty: Int!
+  $transferPenalty: Int!,
+  $arriveBy: Boolean!
 ) {
   plan(
     from: { lat: $fromLat, lon: $fromLon }
@@ -47,6 +48,7 @@ query PlanJourney(
     transportModes: [{ mode: TRANSIT }, { mode: WALK }]
     walkSpeed: $walkSpeed
     transferPenalty: $transferPenalty
+    arriveBy: $arriveBy
   ) {
     itineraries {
       duration
@@ -183,11 +185,15 @@ def _parse_legs(otp_legs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             leg_geom = otp_leg.get("legGeometry") or {}
             encoded_pts = leg_geom.get("points") or ""
             waypoints = _decode_polyline(encoded_pts)
+            dep_ms = otp_leg.get("startTime") or 0
+            arr_ms = otp_leg.get("endTime") or 0
             walk_leg: Dict[str, Any] = {
                 "mode": "walk",
                 "from_stop": from_place.get("name", ""),
                 "to_stop": to_place.get("name", ""),
                 "distance_km": round((otp_leg.get("distance") or 0) / 1000.0, 3),
+                "departure_time": _ms_to_time_str(dep_ms),
+                "arrival_time": _ms_to_time_str(arr_ms),
             }
             if waypoints:
                 walk_leg["waypoints"] = waypoints
@@ -304,6 +310,7 @@ async def _plan_via_v1(
     num_itineraries: int,
     preference: str,
     walking_speed: str,
+    arrive_by: bool = False,
 ) -> List[Dict[str, Any]]:
     """Call the OTP v1 REST planner and return our journey list."""
     url = f"{settings.otp_url}/otp/routers/{settings.otp_router}/plan"
@@ -317,6 +324,7 @@ async def _plan_via_v1(
         "maxWalkDistance": 1000,
         "walkSpeed": _walk_speed_mps(walking_speed),
         "transferPenalty": _transfer_penalty(preference),
+        "arriveBy": "true" if arrive_by else "false",
     }
     resp = await client.get(url, params=params, timeout=30.0)
     resp.raise_for_status()
@@ -339,6 +347,7 @@ async def plan_journey(
     num_itineraries: int = 10,
     preference: str = "fastest",
     walking_speed: str = "medium",
+    arrive_by: bool = False,
 ) -> List[Dict[str, Any]]:
     """
     Plan a journey using OpenTripPlanner.
@@ -365,6 +374,7 @@ async def plan_journey(
         "numItineraries": num_itineraries,
         "walkSpeed": _walk_speed_mps(walking_speed),
         "transferPenalty": _transfer_penalty(preference),
+        "arriveBy": arrive_by,
     }
 
     async with httpx.AsyncClient(timeout=30.0) as client:
@@ -394,4 +404,5 @@ async def plan_journey(
                 dest_lat, dest_lon,
                 dep_time, dep_date,
                 num_itineraries, preference, walking_speed,
+                arrive_by=arrive_by,
             )

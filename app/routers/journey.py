@@ -38,6 +38,7 @@ class JourneyRequest(BaseModel):
     departure_date: Optional[str] = None   # YYYY-MM-DD, DD/MM/YYYY, or DD-MM-YYYY
     preference: Optional[str] = "fastest"  # "fastest" | "least-changes"
     walking_speed: Optional[str] = "medium"  # "slow" | "medium" | "fast"
+    arrive_by: Optional[bool] = False       # False = depart after, True = arrive before
 
 
 # ---------------------------------------------------------------------------
@@ -198,6 +199,7 @@ async def plan_journey(req: JourneyRequest, db: AsyncSession = Depends(get_db)):
             num_itineraries=10,
             preference=req.preference or "fastest",
             walking_speed=req.walking_speed or "medium",
+            arrive_by=req.arrive_by or False,
         )
     except (httpx.ConnectError, httpx.TimeoutException) as exc:
         logger.error("OTP unavailable: %s", exc)
