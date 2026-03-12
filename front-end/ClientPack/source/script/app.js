@@ -918,7 +918,10 @@ const translations = {
         bus: 'Bus',
         walk: 'Walk',
         viewOnMap: '🗺️ View on Map',
-        departureTime: 'Departure Date & Time:',
+        dateTime: 'Date & Time:',
+        timeTypeLabel: 'Time Type:',
+        departAfter: 'Depart After',
+        arriveBefore: 'Arrive Before',
         noJourneys: 'No journeys found for the selected points.',
         selectValidPoints: 'Please select valid start and end points (use the suggestions or click a suggestion).',
         planningRoute: 'Planning route…',
@@ -958,7 +961,10 @@ const translations = {
         bus: '公交',
         walk: '步行',
         viewOnMap: '🗺️ 在地图上查看',
-        departureTime: '出发日期和时间：',
+        dateTime: '日期和时间：',
+        timeTypeLabel: '时间类型：',
+        departAfter: '出发时间不早于',
+        arriveBefore: '到达时间不晚于',
         noJourneys: '未找到符合所选起点和终点的路线。',
         selectValidPoints: '请选择有效的起点和终点（请使用建议列表或点击建议项）。',
         planningRoute: '正在规划路线…',
@@ -990,7 +996,10 @@ function applyTranslations(lang) {
     document.querySelector('label[for="pathfinding"]').textContent = t.pathfinding;
     document.querySelector('#pathfinding option[value="fastest"]').textContent = t.fastest;
     document.querySelector('#pathfinding option[value="least-changes"]').textContent = t.leastChanges;
-    document.querySelector('label[for="departureTime"]').textContent = t.departureTime;
+    document.querySelector('label[for="departureTime"]').textContent = t.dateTime;
+    document.querySelector('label[for="timeType"]').textContent = t.timeTypeLabel;
+    document.querySelector('#timeType option[value="depart-after"]').textContent = t.departAfter;
+    document.querySelector('#timeType option[value="arrive-before"]').textContent = t.arriveBefore;
     document.querySelector('label[for="walkingSpeed"]').textContent = t.walkingSpeed;
     document.querySelector('#walkingSpeed option[value="slow"]').textContent = t.slow;
     document.querySelector('#walkingSpeed option[value="medium"]').textContent = t.medium;
@@ -1390,10 +1399,15 @@ function renderJourneyList(journeys, departureDate) {
         const card = document.createElement('div');
         card.className = 'journey-card';
 
-        // Get all non-walk legs for finding first and last
+        // Get all non-walk legs for finding first and last transit stops
         const busLegs = j.legs && j.legs.filter(l => (l.mode || 'bus') !== 'walk') || [];
-        const firstLeg = busLegs.length > 0 ? busLegs[0] : null;
-        const lastLeg = busLegs.length > 0 ? busLegs[busLegs.length - 1] : null;
+        const firstBusLeg = busLegs.length > 0 ? busLegs[0] : null;
+        const lastBusLeg = busLegs.length > 0 ? busLegs[busLegs.length - 1] : null;
+
+        // Use first and last legs (including walks) for overall journey departure/arrival times
+        const allLegs = j.legs || [];
+        const firstLeg = allLegs.length > 0 ? allLegs[0] : null;
+        const lastLeg = allLegs.length > 0 ? allLegs[allLegs.length - 1] : null;
 
         // Header: route summary + departure/arrival
         const header = document.createElement('div');
@@ -1404,7 +1418,7 @@ function renderJourneyList(journeys, departureDate) {
 
         const originEl = document.createElement('div');
         originEl.className = 'journey-stop-name';
-        originEl.textContent = firstLeg && (firstLeg.origin_stop_name || firstLeg.from_stop || firstLeg.origin_stop_id) || '';
+        originEl.textContent = (firstBusLeg && (firstBusLeg.origin_stop_name || firstBusLeg.from_stop || firstBusLeg.origin_stop_id)) || '';
 
         const arrowEl = document.createElement('div');
         arrowEl.className = 'journey-stop-arrow';
@@ -1412,7 +1426,7 @@ function renderJourneyList(journeys, departureDate) {
 
         const destEl = document.createElement('div');
         destEl.className = 'journey-stop-name';
-        destEl.textContent = lastLeg && (lastLeg.destination_stop_name || lastLeg.to_stop || lastLeg.destination_stop_id) || '';
+        destEl.textContent = (lastBusLeg && (lastBusLeg.destination_stop_name || lastBusLeg.to_stop || lastBusLeg.destination_stop_id)) || '';
 
         summary.appendChild(originEl);
         summary.appendChild(arrowEl);
@@ -1508,6 +1522,30 @@ function renderJourneyList(journeys, departureDate) {
                     distEl.textContent = ` (${leg.distance_km} km)`;
                     li.appendChild(distEl);
                 }
+
+                if (leg.departure_time || leg.arrival_time) {
+                    const walkTimesDiv = document.createElement('div');
+                    walkTimesDiv.className = 'journey-leg-times';
+                    if (leg.departure_time) {
+                        const depSpan = document.createElement('span');
+                        depSpan.className = 'journey-leg-depart';
+                        depSpan.textContent = leg.departure_time;
+                        walkTimesDiv.appendChild(depSpan);
+                    }
+                    if (leg.departure_time && leg.arrival_time) {
+                        const sepSpan = document.createElement('span');
+                        sepSpan.className = 'journey-leg-sep';
+                        sepSpan.textContent = ' → ';
+                        walkTimesDiv.appendChild(sepSpan);
+                    }
+                    if (leg.arrival_time) {
+                        const arrSpan = document.createElement('span');
+                        arrSpan.className = 'journey-leg-arrive';
+                        arrSpan.textContent = leg.arrival_time;
+                        walkTimesDiv.appendChild(arrSpan);
+                    }
+                    li.appendChild(walkTimesDiv);
+                }
             } else {
                 const route = leg.route_name ? `${leg.route_name}` : (leg.route_id || 'Route');
 
@@ -1579,6 +1617,7 @@ planRouteBtn.addEventListener('click', async () => {
     const pathfinding = document.getElementById('pathfinding').value;
     const walkingSpeed = document.getElementById('walkingSpeed').value;
     const departureTimeInput = document.getElementById('departureTime').value;
+    const timeType = document.getElementById('timeType').value;
 
     // Ensure typed inputs are resolved to stops if possible
     await ensureSelectedFromInput(true);
@@ -1616,6 +1655,7 @@ planRouteBtn.addEventListener('click', async () => {
     // Add request parameters
     body.preference = pathfinding;
     body.walking_speed = walkingSpeed;
+    body.arrive_by = (timeType === 'arrive-before');
     if (departureTimeInput) {
         // datetime-local value is "YYYY-MM-DDTHH:MM" — split into date and time
         const tIdx = departureTimeInput.indexOf('T');
