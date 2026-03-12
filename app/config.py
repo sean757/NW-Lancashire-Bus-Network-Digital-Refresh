@@ -14,6 +14,14 @@ class Settings(BaseSettings):
     app_title: str = "SCC200 Transport API"
     api_prefix: str = "/api/v1"
 
+    # OpenTripPlanner
+    # OTP default port is 8080, but the FastAPI backend also uses 8080.
+    # Run OTP on 9090 (--port 9090) and set OTP_URL=http://localhost:9090,
+    # or set this variable to wherever your OTP instance is listening.
+    otp_url: str = "http://localhost:9090"
+    # Router ID used by OTP v1 REST fallback (OTP v2 ignores this)
+    otp_router: str = "default"
+
     # STOMP (National Rail feed)
     stomp_host: str = ""
     stomp_port: int = 61613

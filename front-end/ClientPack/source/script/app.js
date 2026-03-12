@@ -79,6 +79,20 @@ function extractLatLng(item) {
     return [la, lo];
 }
 
+/**
+ * Create a lightweight location item from a Leaflet LatLng object (map click).
+ * The returned object is compatible with extractLatLng / getLabelFromItem / addStartMarker / addEndMarker.
+ */
+function makeCustomItem(latlng) {
+    const lat = latlng.lat.toFixed(5);
+    const lon = latlng.lng.toFixed(5);
+    return {
+        lat: latlng.lat,
+        lon: latlng.lng,
+        stop_name: `${lat}, ${lon}`,
+    };
+}
+
 function addStartMarker(item) {
     const coords = extractLatLng(item);
     selectedStartItem = item;
@@ -126,6 +140,7 @@ function addEndMarker(item) {
 
 // Accessible notification function (UI helper)
 function showNotification(message) {
+    if (uiSettings.disableNotifications) return;
     const toast = document.getElementById('notificationToast');
     toast.textContent = message;
     toast.classList.add('show');
@@ -135,10 +150,39 @@ function showNotification(message) {
     }, 3000);
 }
 
+/**
+ * Update the map click hint control text to reflect what the next click will do.
+ * Called after each map click and after adding/clearing markers.
+ */
+function updateMapClickHint() {
+    const hint = document.getElementById('mapClickHint');
+    if (!hint) return;
+    if (!uiSettings.showMapHints) {
+        hint.style.display = 'none';
+        return;
+    }
+    hint.style.display = 'block';
+    const t = translations[currentLang] || translations.en;
+    if (!selectedStartItem && !selectedEndItem) {
+        hint.textContent = t.clickHintStart;
+    } else if (selectedStartItem && !selectedEndItem) {
+        hint.textContent = t.clickHintEnd;
+    } else {
+        hint.textContent = t.clickHintReset;
+    }
+}
+
 // Map / state variables
 let map = null;
 let startMarker = null;
 let endMarker = null;
+
+// Bus stop markers layer
+let busStopLayerGroup = null;
+// Zoom level at which bus stop icons become visible
+const BUS_STOP_ZOOM_THRESHOLD = 14;
+// Debounce timer for updateBusStopMarkers
+let busStopUpdateTimer = null;
 
 // DOM selectors
 let fromInput = document.getElementById('startPoint');
@@ -495,6 +539,7 @@ toInput.addEventListener('input', () => {
 // Initialize map and click handlers
 document.addEventListener('DOMContentLoaded', () => {
     loadAccessibilitySettings();
+    loadUiSettings();
     initializeLeafletMap();
     initializePlannerToggle();
 });
@@ -503,7 +548,19 @@ document.addEventListener('DOMContentLoaded', () => {
 document.addEventListener('DOMContentLoaded', () => {
     loadAccessibilitySettings();
     loadLanguageSettings();
+    loadUiSettings();
     initializeLeafletMap();
+
+    // Set datetime-local input constraint: max = now + 7 days
+    const dtInput = document.getElementById('departureTime');
+    if (dtInput) {
+        const maxDate = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+        // Format as YYYY-MM-DDTHH:MM (datetime-local format)
+        const pad = n => String(n).padStart(2, '0');
+        const toLocalDTString = d =>
+            `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+        dtInput.max = toLocalDTString(maxDate);
+    }
 });
 
 
@@ -520,7 +577,8 @@ function initializeLeafletMap() {
     map = L.map('map', {
         maxBounds: northLancashireBounds,
         maxBoundsViscosity: 1.0,  // Makes bounds "hard" - prevents dragging outside
-        zoomControl: false
+        zoomControl: false,
+        doubleClickZoom: false
     }).setView([53.7632, -2.7031], 10);
 
     // Add OpenStreetMap tiles
@@ -543,7 +601,202 @@ function initializeLeafletMap() {
         pendingEndItem = null;
     }
 
-    // Note: Map click handling for markers will be implemented in a future update
+    // Zoom hint control – tells the user to zoom in to see/select bus stops
+    const zoomHint = L.control({ position: 'bottomright' });
+    zoomHint.onAdd = function () {
+        const div = L.DomUtil.create('div', 'bus-stop-zoom-hint');
+        div.setAttribute('aria-live', 'polite');
+        div.textContent = '🔍 Zoom in to see and select bus stops on the map';
+        return div;
+    };
+    zoomHint.addTo(map);
+
+    function updateZoomHint() {
+        const hint = document.querySelector('.bus-stop-zoom-hint');
+        if (!hint) return;
+        if (!uiSettings.showMapHints) {
+            hint.style.display = 'none';
+            return;
+        }
+        if (map.getZoom() >= BUS_STOP_ZOOM_THRESHOLD) {
+            hint.style.display = 'none';
+        } else {
+            hint.style.display = 'block';
+        }
+    }
+
+    // Load/refresh bus stop markers whenever the view changes (debounced)
+    map.on('zoomend moveend', () => {
+        updateZoomHint();
+        if (busStopUpdateTimer) clearTimeout(busStopUpdateTimer);
+        busStopUpdateTimer = setTimeout(() => {
+            busStopUpdateTimer = null;
+            updateBusStopMarkers();
+        }, 300);
+    });
+    updateZoomHint();
+
+    // Map click hint control – shows what the next map click will do
+    const clickHintControl = L.control({ position: 'bottomright' });
+    clickHintControl.onAdd = function () {
+        const div = L.DomUtil.create('div', 'map-click-hint');
+        div.setAttribute('aria-live', 'polite');
+        div.id = 'mapClickHint';
+        return div;
+    };
+    clickHintControl.addTo(map);
+    updateMapClickHint();
+
+    // Handle map double-clicks for start / end point selection.
+    // 1st double-click  → set start point
+    // 2nd double-click  → set end point
+    // 3rd+ double-click → reset start (clear existing end) so the user can pick a new route
+    map.on('dblclick', (e) => {
+        const item = makeCustomItem(e.latlng);
+        const label = getLabelFromItem(item);
+        const t = translations[currentLang] || translations.en;
+        if (!selectedStartItem) {
+            if (fromInputTimer) { clearTimeout(fromInputTimer); fromInputTimer = null; }
+            fromInput.value = label;
+            clearFromSuggestions();
+            addStartMarker(item);
+            showNotification(t.mapClickNotifyStart);
+        } else if (!selectedEndItem) {
+            if (toInputTimer) { clearTimeout(toInputTimer); toInputTimer = null; }
+            toInput.value = label;
+            clearToSuggestions();
+            addEndMarker(item);
+            showNotification(t.mapClickNotifyEnd);
+        } else {
+            // Both already set — update start and clear end so the user can pick a new route
+            if (fromInputTimer) { clearTimeout(fromInputTimer); fromInputTimer = null; }
+            selectedEndItem = null;
+            toInput.value = '';
+            if (endMarker) { map.removeLayer(endMarker); endMarker = null; }
+            fromInput.value = label;
+            clearFromSuggestions();
+            addStartMarker(item);
+            showNotification(t.mapClickNotifyReset);
+        }
+        updateMapClickHint();
+    });
+}
+
+/**
+ * Fetch bus stops within the current map bounds and render them as
+ * clickable Leaflet markers.  Only active when zoom >= BUS_STOP_ZOOM_THRESHOLD.
+ */
+async function updateBusStopMarkers() {
+    if (!map) return;
+
+    // Below threshold – remove any existing stop markers and bail out
+    if (map.getZoom() < BUS_STOP_ZOOM_THRESHOLD) {
+        if (busStopLayerGroup) {
+            busStopLayerGroup.clearLayers();
+        }
+        return;
+    }
+
+    const bounds = map.getBounds();
+    const params = new URLSearchParams({
+        min_lat: bounds.getSouth(),
+        max_lat: bounds.getNorth(),
+        min_lon: bounds.getWest(),
+        max_lon: bounds.getEast(),
+        limit: 200,
+    });
+
+    let stops = [];
+    try {
+        const res = await fetch(`${apiUrl}/stops/bounds?${params}`);
+        if (res.ok) {
+            stops = await res.json();
+        }
+    } catch (err) {
+        console.error('Failed to fetch bus stops for map view:', err);
+        return;
+    }
+
+    // Initialise the layer group once
+    if (!busStopLayerGroup) {
+        busStopLayerGroup = L.layerGroup().addTo(map);
+    } else {
+        busStopLayerGroup.clearLayers();
+    }
+
+    stops.forEach((stop) => {
+        const lat = parseFloat(stop.latitude);
+        const lon = parseFloat(stop.longitude);
+        if (isNaN(lat) || isNaN(lon)) return;
+
+        // Custom bus-stop icon (DivIcon so it works without external images)
+        const icon = L.divIcon({
+            className: 'bus-stop-icon',
+            html: `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" role="img" aria-label="Bus stop">
+                <circle cx="16" cy="16" r="15" fill="#2E5090" stroke="white" stroke-width="2.5"/>
+                <text x="16" y="21" font-family="Arial,sans-serif" font-size="15" font-weight="bold" fill="white" text-anchor="middle">B</text>
+            </svg>`,
+            iconSize: [32, 32],
+            iconAnchor: [16, 16],
+            popupAnchor: [0, -18],
+        });
+
+        const label = stop.stop_name + (stop.locality ? ` (${stop.locality})` : '');
+        const marker = L.marker([lat, lon], {
+            icon,
+            title: label,
+            alt: `Bus stop: ${label}`,
+        });
+
+        // Build popup with "Set as Start" / "Set as End" buttons
+        const popupEl = document.createElement('div');
+        popupEl.className = 'bus-stop-popup';
+
+        const nameEl = document.createElement('strong');
+        nameEl.textContent = label;
+        popupEl.appendChild(nameEl);
+
+        const btnGroup = document.createElement('div');
+        btnGroup.className = 'bus-stop-popup-btns';
+
+        const setStartBtn = document.createElement('button');
+        setStartBtn.className = 'bus-stop-popup-btn bus-stop-popup-btn--start';
+        setStartBtn.setAttribute('aria-label', `Set ${label} as start point`);
+        setStartBtn.textContent = '📍 Set as Start';
+        setStartBtn.addEventListener('click', () => {
+            fromInput.value = label;
+            addStartMarker(stop);
+            marker.closePopup();
+            showNotification(`Start point set to: ${label}`);
+            updateMapClickHint();
+        });
+
+        const setEndBtn = document.createElement('button');
+        setEndBtn.className = 'bus-stop-popup-btn bus-stop-popup-btn--end';
+        setEndBtn.setAttribute('aria-label', `Set ${label} as end point`);
+        setEndBtn.textContent = '🏁 Set as End';
+        setEndBtn.addEventListener('click', () => {
+            toInput.value = label;
+            addEndMarker(stop);
+            marker.closePopup();
+            showNotification(`End point set to: ${label}`);
+            updateMapClickHint();
+        });
+
+        btnGroup.appendChild(setStartBtn);
+        btnGroup.appendChild(setEndBtn);
+        popupEl.appendChild(btnGroup);
+
+        marker.bindPopup(popupEl, { maxWidth: 220 });
+
+        // Prevent the bus-stop marker click from also triggering the map click handler
+        // (which would set start/end to the map coordinate rather than the stop).
+        marker.on('click', (e) => {
+            L.DomEvent.stopPropagation(e.originalEvent);
+        });
+
+        busStopLayerGroup.addLayer(marker);
+    });
 }
 
 
@@ -649,6 +902,59 @@ const languageModal = document.getElementById('languageModal');
 const closeLanguageModal = document.getElementById('closeLanguageModal');
 const saveLanguage = document.getElementById('saveLanguage');
 
+// App Settings Modal
+const settingsLink = document.getElementById('settingsLink');
+const settingsModal = document.getElementById('settingsModal');
+const closeSettingsModal = document.getElementById('closeSettingsModal');
+const saveUiSettingsBtn = document.getElementById('saveUiSettings');
+const settingsShowWeatherInput = document.getElementById('settingsShowWeather');
+const settingsShowMapHintsInput = document.getElementById('settingsShowMapHints');
+const settingsDarkMapInput = document.getElementById('settingsDarkMap');
+const settingsDisableNotificationsInput = document.getElementById('settingsDisableNotifications');
+
+const defaultUiSettings = {
+    showWeather: true,
+    showMapHints: true,
+    darkMap: false,
+    disableNotifications: false,
+};
+
+let uiSettings = { ...defaultUiSettings };
+
+function applyUiSettings() {
+    const weatherWidget = document.getElementById('weatherWidget');
+    if (weatherWidget) {
+        weatherWidget.style.display = uiSettings.showWeather ? '' : 'none';
+    }
+
+    document.body.classList.toggle('hide-map-hints', !uiSettings.showMapHints);
+    document.body.classList.toggle('map-night-mode', !!uiSettings.darkMap);
+    updateMapClickHint();
+}
+
+function loadUiSettings() {
+    const raw = localStorage.getItem('ui_settings');
+    if (raw) {
+        try {
+            const parsed = JSON.parse(raw);
+            uiSettings = {
+                ...defaultUiSettings,
+                ...parsed,
+            };
+        } catch (err) {
+            uiSettings = { ...defaultUiSettings };
+        }
+    } else {
+        uiSettings = { ...defaultUiSettings };
+    }
+
+    if (settingsShowWeatherInput) settingsShowWeatherInput.checked = !!uiSettings.showWeather;
+    if (settingsShowMapHintsInput) settingsShowMapHintsInput.checked = !!uiSettings.showMapHints;
+    if (settingsDarkMapInput) settingsDarkMapInput.checked = !!uiSettings.darkMap;
+    if (settingsDisableNotificationsInput) settingsDisableNotificationsInput.checked = !!uiSettings.disableNotifications;
+    applyUiSettings();
+}
+
 // Translation dictionary
 const translations = {
     en: {
@@ -672,18 +978,35 @@ const translations = {
         home: 'Home',
         accessibility: 'Accessibility Settings',
         languages: 'Languages',
+        settings: 'Settings',
         reportBug: 'Report Bug',
+        settingsTitle: 'Settings',
+        settingsShowWeather: 'Show weather icon',
+        settingsShowMapHints: 'Show map helper pop-ups',
+        settingsDarkMap: 'Dark mode map tint',
+        settingsDisableNotifications: 'Disable notification messages',
+        settingsSave: 'Save Settings',
+        settingsSaved: 'Settings updated successfully!',
         departs: 'DEPARTS',
         arrives: 'ARRIVES',
         bus: 'Bus',
         walk: 'Walk',
         viewOnMap: '🗺️ View on Map',
-        departureTime: 'Departure Time:',
+        dateTime: 'Date & Time:',
+        timeTypeLabel: 'Time Type:',
+        departAfter: 'Depart After',
+        arriveBefore: 'Arrive Before',
         noJourneys: 'No journeys found for the selected points.',
         selectValidPoints: 'Please select valid start and end points (use the suggestions or click a suggestion).',
         planningRoute: 'Planning route…',
         routePlanningError: 'Error planning route',
-        routePlanningFailed: 'Failed to plan route. See console for details.'
+        routePlanningFailed: 'Failed to plan route. See console for details.',
+        clickHintStart: '🖱️ Double-click the map to set your start point',
+        clickHintEnd: '🖱️ Double-click the map to set your end point',
+        clickHintReset: '🖱️ Double-click the map to change your start point',
+        mapClickNotifyStart: 'Start point set. Now double-click your destination on the map.',
+        mapClickNotifyEnd: "End point set. Click 'Plan Route' to continue.",
+        mapClickNotifyReset: 'Start point updated. Now double-click your destination on the map.'
     },
     zh: {
         header: '兰开夏郡旅程规划',
@@ -706,18 +1029,35 @@ const translations = {
         home: '主页',
         accessibility: '无障碍设置',
         languages: '语言',
+        settings: '设置',
         reportBug: '报告错误',
+        settingsTitle: '设置',
+        settingsShowWeather: '显示天气图标',
+        settingsShowMapHints: '显示地图提示弹窗',
+        settingsDarkMap: '地图夜间深色',
+        settingsDisableNotifications: '禁用通知消息',
+        settingsSave: '保存设置',
+        settingsSaved: '设置更新成功！',
         departs: '出发',
         arrives: '到达',
         bus: '公交',
         walk: '步行',
         viewOnMap: '🗺️ 在地图上查看',
-        departureTime: '出发时间：',
+        dateTime: '日期和时间：',
+        timeTypeLabel: '时间类型：',
+        departAfter: '出发时间不早于',
+        arriveBefore: '到达时间不晚于',
         noJourneys: '未找到符合所选起点和终点的路线。',
         selectValidPoints: '请选择有效的起点和终点（请使用建议列表或点击建议项）。',
         planningRoute: '正在规划路线…',
         routePlanningError: '路线规划出错',
-        routePlanningFailed: '路线规划失败。请查看控制台了解详情。'
+        routePlanningFailed: '路线规划失败。请查看控制台了解详情。',
+        clickHintStart: '🖱️ 双击地图设置起点',
+        clickHintEnd: '🖱️ 双击地图设置终点',
+        clickHintReset: '🖱️ 双击地图更改起点',
+        mapClickNotifyStart: '起点已设置。请在地图上双击目的地。',
+        mapClickNotifyEnd: '终点已设置。点击"规划路线"继续。',
+        mapClickNotifyReset: '起点已更新。请在地图上双击目的地。'
     }
 };
 
@@ -738,7 +1078,10 @@ function applyTranslations(lang) {
     document.querySelector('label[for="pathfinding"]').textContent = t.pathfinding;
     document.querySelector('#pathfinding option[value="fastest"]').textContent = t.fastest;
     document.querySelector('#pathfinding option[value="least-changes"]').textContent = t.leastChanges;
-    document.querySelector('label[for="departureTime"]').textContent = t.departureTime;
+    document.querySelector('label[for="departureTime"]').textContent = t.dateTime;
+    document.querySelector('label[for="timeType"]').textContent = t.timeTypeLabel;
+    document.querySelector('#timeType option[value="depart-after"]').textContent = t.departAfter;
+    document.querySelector('#timeType option[value="arrive-before"]').textContent = t.arriveBefore;
     document.querySelector('label[for="walkingSpeed"]').textContent = t.walkingSpeed;
     document.querySelector('#walkingSpeed option[value="slow"]').textContent = t.slow;
     document.querySelector('#walkingSpeed option[value="medium"]').textContent = t.medium;
@@ -757,7 +1100,22 @@ function applyTranslations(lang) {
     document.querySelector('.sidebar-menu li:nth-child(1) a').textContent = t.home;
     document.querySelector('#accessibilityLink').textContent = t.accessibility;
     document.querySelector('#languageLink').textContent = t.languages;
+    document.querySelector('#settingsLink').textContent = t.settings;
     document.querySelector('#reportBugLink').textContent = t.reportBug;
+
+    // Settings modal
+    const settingsTitle = document.querySelector('#settingsModal .modal-header h2');
+    if (settingsTitle) settingsTitle.textContent = t.settingsTitle;
+    const weatherLabel = document.querySelector('label[for="settingsShowWeather"]');
+    if (weatherLabel) weatherLabel.textContent = t.settingsShowWeather;
+    const hintsLabel = document.querySelector('label[for="settingsShowMapHints"]');
+    if (hintsLabel) hintsLabel.textContent = t.settingsShowMapHints;
+    const darkMapLabel = document.querySelector('label[for="settingsDarkMap"]');
+    if (darkMapLabel) darkMapLabel.textContent = t.settingsDarkMap;
+    const disableNotificationsLabel = document.querySelector('label[for="settingsDisableNotifications"]');
+    if (disableNotificationsLabel) disableNotificationsLabel.textContent = t.settingsDisableNotifications;
+    const settingsSaveBtn = document.getElementById('saveUiSettings');
+    if (settingsSaveBtn) settingsSaveBtn.textContent = t.settingsSave;
 
     currentLang = lang;
 }
@@ -785,6 +1143,38 @@ saveLanguage.addEventListener('click', () => {
     localStorage.setItem('language', selectedLang);
     languageModal.classList.remove('active');
     showNotification(selectedLang === 'en' ? 'Language updated successfully!' : '语言更新成功！');
+});
+
+settingsLink.addEventListener('click', (e) => {
+    e.preventDefault();
+    settingsShowWeatherInput.checked = !!uiSettings.showWeather;
+    settingsShowMapHintsInput.checked = !!uiSettings.showMapHints;
+    if (settingsDarkMapInput) settingsDarkMapInput.checked = !!uiSettings.darkMap;
+    if (settingsDisableNotificationsInput) settingsDisableNotificationsInput.checked = !!uiSettings.disableNotifications;
+    settingsModal.classList.add('active');
+    sidebar.classList.remove('active');
+});
+
+closeSettingsModal.addEventListener('click', () => {
+    settingsModal.classList.remove('active');
+});
+
+settingsModal.addEventListener('click', (e) => {
+    if (e.target === settingsModal) {
+        settingsModal.classList.remove('active');
+    }
+});
+
+saveUiSettingsBtn.addEventListener('click', () => {
+    uiSettings.showWeather = !!settingsShowWeatherInput.checked;
+    uiSettings.showMapHints = !!settingsShowMapHintsInput.checked;
+    uiSettings.darkMap = !!(settingsDarkMapInput && settingsDarkMapInput.checked);
+    uiSettings.disableNotifications = !!(settingsDisableNotificationsInput && settingsDisableNotificationsInput.checked);
+    localStorage.setItem('ui_settings', JSON.stringify(uiSettings));
+    applyUiSettings();
+    settingsModal.classList.remove('active');
+    const t = translations[currentLang] || translations.en;
+    showNotification(t.settingsSaved || 'Settings updated successfully!');
 });
 
 // Load saved language on page load
@@ -847,8 +1237,184 @@ function loadAccessibilitySettings() {
 // Plan Route functionality
 const planRouteBtn = document.getElementById('planRouteBtn');
 const routeContent = document.getElementById('routeContent');
+const routeDisplay = document.getElementById('routeDisplay');
 // Layer group to hold drawn routes so we can clear them
 let routeLayerGroup = null;
+
+function initializeRouteDisplayInteractions() {
+    if (!routeDisplay) return;
+    const dragHandle = routeDisplay.querySelector('h3');
+    if (!dragHandle) return;
+
+    let resizer = routeDisplay.querySelector('.route-display-resizer');
+    if (!resizer) {
+        resizer = document.createElement('div');
+        resizer.className = 'route-display-resizer';
+        resizer.setAttribute('aria-hidden', 'true');
+        routeDisplay.appendChild(resizer);
+    }
+
+    let isDragging = false;
+    let isResizing = false;
+    let activePointerId = null;
+    let dragOffsetX = 0;
+    let dragOffsetY = 0;
+
+    let resizeStartX = 0;
+    let resizeStartY = 0;
+    let resizeStartWidth = 0;
+    let resizeStartHeight = 0;
+
+    const getPanelMinWidth = () => parseFloat(getComputedStyle(routeDisplay).minWidth) || 260;
+    const getPanelMinHeight = () => parseFloat(getComputedStyle(routeDisplay).minHeight) || 160;
+
+    const normalizePositionAnchor = () => {
+        const container = routeDisplay.parentElement;
+        if (!container) return;
+        const containerRect = container.getBoundingClientRect();
+        const panelRect = routeDisplay.getBoundingClientRect();
+        routeDisplay.style.left = (panelRect.left - containerRect.left) + 'px';
+        routeDisplay.style.top = (panelRect.top - containerRect.top) + 'px';
+        routeDisplay.style.right = 'auto';
+    };
+
+    const clampToContainer = () => {
+        const container = routeDisplay.parentElement;
+        if (!container) return;
+
+        const containerRect = container.getBoundingClientRect();
+        const panelRect = routeDisplay.getBoundingClientRect();
+
+        // If panel has not been moved yet (still right-anchored), skip clamping.
+        if (!routeDisplay.style.left && !routeDisplay.style.top) return;
+
+        const maxAllowedWidth = Math.max(getPanelMinWidth(), containerRect.width);
+        const maxAllowedHeight = Math.max(getPanelMinHeight(), containerRect.height);
+
+        const currentWidth = panelRect.width;
+        const currentHeight = panelRect.height;
+
+        if (currentWidth > maxAllowedWidth) {
+            routeDisplay.style.width = maxAllowedWidth + 'px';
+        }
+        if (currentHeight > maxAllowedHeight) {
+            routeDisplay.style.height = maxAllowedHeight + 'px';
+        }
+
+        const updatedRect = routeDisplay.getBoundingClientRect();
+        const maxLeft = Math.max(0, containerRect.width - updatedRect.width);
+        const maxTop = Math.max(0, containerRect.height - updatedRect.height);
+
+        const currentLeft = parseFloat(routeDisplay.style.left || '0');
+        const currentTop = parseFloat(routeDisplay.style.top || '0');
+
+        routeDisplay.style.left = Math.min(Math.max(0, currentLeft), maxLeft) + 'px';
+        routeDisplay.style.top = Math.min(Math.max(0, currentTop), maxTop) + 'px';
+    };
+
+    const onPointerMove = (e) => {
+        if (activePointerId !== null && e.pointerId !== activePointerId) return;
+        const container = routeDisplay.parentElement;
+        if (!container) return;
+
+        const containerRect = container.getBoundingClientRect();
+
+        if (isDragging) {
+            const panelRect = routeDisplay.getBoundingClientRect();
+
+            let left = e.clientX - containerRect.left - dragOffsetX;
+            let top = e.clientY - containerRect.top - dragOffsetY;
+
+            const maxLeft = Math.max(0, containerRect.width - panelRect.width);
+            const maxTop = Math.max(0, containerRect.height - panelRect.height);
+
+            left = Math.min(Math.max(0, left), maxLeft);
+            top = Math.min(Math.max(0, top), maxTop);
+
+            routeDisplay.style.left = left + 'px';
+            routeDisplay.style.top = top + 'px';
+            routeDisplay.style.right = 'auto';
+        }
+
+        if (isResizing) {
+            const leftPx = parseFloat(routeDisplay.style.left || '0');
+            const topPx = parseFloat(routeDisplay.style.top || '0');
+
+            const maxWidth = Math.max(getPanelMinWidth(), containerRect.width - leftPx);
+            const maxHeight = Math.max(getPanelMinHeight(), containerRect.height - topPx);
+
+            let nextWidth = resizeStartWidth + (e.clientX - resizeStartX);
+            let nextHeight = resizeStartHeight + (e.clientY - resizeStartY);
+
+            nextWidth = Math.min(Math.max(getPanelMinWidth(), nextWidth), maxWidth);
+            nextHeight = Math.min(Math.max(getPanelMinHeight(), nextHeight), maxHeight);
+
+            routeDisplay.style.width = nextWidth + 'px';
+            routeDisplay.style.height = nextHeight + 'px';
+        }
+    };
+
+    const onPointerUp = (e) => {
+        if (activePointerId !== null && e.pointerId !== activePointerId) return;
+        if (!isDragging && !isResizing) return;
+        isDragging = false;
+        isResizing = false;
+        activePointerId = null;
+        document.body.classList.remove('route-panel-dragging');
+        document.body.classList.remove('route-panel-resizing');
+        window.removeEventListener('pointermove', onPointerMove);
+        window.removeEventListener('pointerup', onPointerUp);
+        window.removeEventListener('pointercancel', onPointerUp);
+    };
+
+    dragHandle.addEventListener('pointerdown', (e) => {
+        // Primary pointer only
+        if (!e.isPrimary) return;
+        if (e.target === resizer) return;
+        normalizePositionAnchor();
+        clampToContainer();
+
+        isDragging = true;
+        activePointerId = e.pointerId;
+
+        const panelRect = routeDisplay.getBoundingClientRect();
+        dragOffsetX = e.clientX - panelRect.left;
+        dragOffsetY = e.clientY - panelRect.top;
+
+        document.body.classList.add('route-panel-dragging');
+        window.addEventListener('pointermove', onPointerMove);
+        window.addEventListener('pointerup', onPointerUp);
+        window.addEventListener('pointercancel', onPointerUp);
+        e.preventDefault();
+    });
+
+    resizer.addEventListener('pointerdown', (e) => {
+        if (!e.isPrimary) return;
+        normalizePositionAnchor();
+        clampToContainer();
+
+        isResizing = true;
+        activePointerId = e.pointerId;
+
+        const panelRect = routeDisplay.getBoundingClientRect();
+        resizeStartX = e.clientX;
+        resizeStartY = e.clientY;
+        resizeStartWidth = panelRect.width;
+        resizeStartHeight = panelRect.height;
+
+        document.body.classList.add('route-panel-resizing');
+        window.addEventListener('pointermove', onPointerMove);
+        window.addEventListener('pointerup', onPointerUp);
+        window.addEventListener('pointercancel', onPointerUp);
+        e.preventDefault();
+        e.stopPropagation();
+    });
+
+    // Keep panel visible if viewport/container changes while resized.
+    window.addEventListener('resize', clampToContainer);
+}
+
+initializeRouteDisplayInteractions();
 
 async function fetchStop(stop_id) {
     try {
@@ -870,8 +1436,46 @@ function clearRouteLayers() {
     }
 }
 
-// OpenRouteService API key – replace with your key from https://openrouteservice.org/
-// Note: as this is client-side code the key will be visible in the browser source.
+// Cache for route waypoints responses keyed by "route_id|direction|from_stop|to_stop"
+const waypointsCache = {};
+
+/**
+ * Fetch ordered waypoints for a bus route leg from the backend.
+ * Returns an array of [lat, lon] pairs, or null if unavailable.
+ *
+ * @param {string} routeId   - The route_id from the journey leg.
+ * @param {string} direction - The direction ('outbound' or 'inbound').
+ * @param {string} fromStop  - Origin stop_id of the leg.
+ * @param {string} toStop    - Destination stop_id of the leg.
+ */
+async function fetchRouteWaypoints(routeId, direction, fromStop, toStop) {
+    if (!routeId) return null;
+    const cacheKey = `${routeId}|${direction || 'outbound'}|${fromStop || ''}|${toStop || ''}`;
+    if (waypointsCache[cacheKey] !== undefined) return waypointsCache[cacheKey];
+
+    try {
+        let url = `${apiUrl}/routes/${encodeURIComponent(routeId)}/waypoints?direction=${encodeURIComponent(direction || 'outbound')}`;
+        if (fromStop) url += `&from_stop=${encodeURIComponent(fromStop)}`;
+        if (toStop) url += `&to_stop=${encodeURIComponent(toStop)}`;
+        const res = await fetch(url);
+        if (!res.ok) {
+            waypointsCache[cacheKey] = null;
+            return null;
+        }
+        const data = await res.json();
+        // Convert [{lat, lon}, …] → [[lat, lon], …] for Leaflet
+        const coords = Array.isArray(data) && data.length > 1
+            ? data.map(pt => [pt.lat, pt.lon])
+            : null;
+        waypointsCache[cacheKey] = coords;
+        return coords;
+    } catch (err) {
+        console.error('fetchRouteWaypoints error:', err);
+        waypointsCache[cacheKey] = null;
+        return null;
+    }
+}
+
 const ORS_API_KEY = 'eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjdmZDJkOGZmNzM4MTQyMjk5ZDhhYmM2MGIxNTZiMWU4IiwiaCI6Im11cm11cjY0In0=';
 
 // Cache for ORS route responses keyed by "lat,lon|lat,lon"
@@ -931,6 +1535,9 @@ async function ensureSelectedFromInput(isStart = true) {
     return false;
 }
 
+// Distinct colours used to distinguish consecutive bus legs on the map.
+const LEG_COLOURS = ['#E74C3C', '#8E44AD', '#2980B9', '#27AE60', '#F39C12', '#16A085', '#D35400', '#2C3E50'];
+
 async function drawJourneyOnMap(journey) {
     if (!map) return;
     clearRouteLayers();
@@ -964,50 +1571,78 @@ async function drawJourneyOnMap(journey) {
     const legs = journey.legs || [];
     const polylinePoints = [];
     let lastPoint = null;
+    let busLegIndex = 0;
     for (let i = 0; i < legs.length; i++) {
         const leg = legs[i];
         if (leg.mode === 'walk') {
-            // Draw walking transfer as dashed line between previous and next bus points
-            // find next bus leg origin
-            let nextBusCoords = null;
-            for (let j = i + 1; j < legs.length; j++) {
-                if ((legs[j].mode || 'bus') === 'walk') continue;
-                nextBusCoords = await coordsForLegEndpoint(legs[j], 'origin_stop_id');
-                if (nextBusCoords) break;
-            }
-            if (lastPoint && nextBusCoords) {
-                try {
-                    console.log(`Routing walking leg from ${lastPoint} to ${nextBusCoords}`);
-                    const routed = await routeAlongRoad(lastPoint, nextBusCoords, 'walking');
-                    if (routed && routed.length) {
-                        L.polyline(routed, { color: '#3E8EDE', weight: 3, opacity: 0.8, dashArray: '8,6' }).addTo(routeLayerGroup);
-                    } else {
-                        L.polyline([lastPoint, nextBusCoords], { color: '#3E8EDE', weight: 3, opacity: 0.8, dashArray: '8,6' }).addTo(routeLayerGroup);
-                    }
-                } catch (err) {
-                    L.polyline([lastPoint, nextBusCoords], { color: '#3E8EDE', weight: 3, opacity: 0.8, dashArray: '8,6' }).addTo(routeLayerGroup);
+            // Draw walking transfer as dashed line.
+            // Prefer waypoints provided by the OTP server (leg.waypoints), then
+            // try OpenRouteService, and finally fall back to a straight line.
+            const walkStyle = { color: '#3E8EDE', weight: 3, opacity: 0.8, dashArray: '8,6' };
+            if (leg.waypoints && leg.waypoints.length > 1) {
+                // Use the detailed walking geometry supplied by OTP.
+                L.polyline(leg.waypoints, walkStyle).addTo(routeLayerGroup);
+            } else {
+                // Fall back to OpenRouteService or a straight line between the
+                // previous bus leg's last stop and the next bus leg's first stop.
+                let nextBusCoords = null;
+                for (let j = i + 1; j < legs.length; j++) {
+                    if ((legs[j].mode || 'bus') === 'walk') continue;
+                    nextBusCoords = await coordsForLegEndpoint(legs[j], 'origin_stop_id');
+                    if (nextBusCoords) break;
                 }
-                // don't update lastPoint here; next bus leg will set it
+                if (lastPoint && nextBusCoords) {
+                    try {
+                        console.log(`Routing walking leg from ${lastPoint} to ${nextBusCoords}`);
+                        const routed = await routeAlongRoad(lastPoint, nextBusCoords, 'walking');
+                        if (routed && routed.length) {
+                            L.polyline(routed, walkStyle).addTo(routeLayerGroup);
+                        } else {
+                            L.polyline([lastPoint, nextBusCoords], walkStyle).addTo(routeLayerGroup);
+                        }
+                    } catch (err) {
+                        L.polyline([lastPoint, nextBusCoords], walkStyle).addTo(routeLayerGroup);
+                    }
+                }
             }
+            // don't update lastPoint here; next bus leg will set it
             continue;
         }
-        // bus or default leg
+        // bus or default leg — assign a unique colour per leg
+        const legColor = LEG_COLOURS[busLegIndex % LEG_COLOURS.length];
+        busLegIndex++;
         const a = await coordsForLegEndpoint(leg, 'origin_stop_id');
         const b = await coordsForLegEndpoint(leg, 'destination_stop_id');
         if (a) polylinePoints.push(a);
         if (b) polylinePoints.push(b);
         // Draw marker for origin and destination of this leg
         if (a) {
-            const popupA = `<div><strong>${leg.origin_stop_name || leg.from_stop || leg.origin_stop_id || ''}</strong>${leg.departure_time ? `<div style="color:#27AE60;font-weight:600;">Dep: ${leg.departure_time}</div>` : ''}</div>`;
-            L.circleMarker(a, { radius: 6, color: '#2E5090', fillColor: '#fff', weight: 2 }).addTo(routeLayerGroup).bindPopup(popupA);
+            const popupA = `<div><strong>${leg.origin_stop_name || leg.from_stop || leg.origin_stop_id || ''}</strong>${leg.departure_time ? `<div class="popup-depart-time">Dep: ${leg.departure_time}</div>` : ''}</div>`;
+            L.circleMarker(a, { radius: 6, color: legColor, fillColor: '#fff', weight: 2 }).addTo(routeLayerGroup).bindPopup(popupA);
         }
         if (b) {
-            const popupB = `<div><strong>${leg.destination_stop_name || leg.to_stop || leg.destination_stop_id || ''}</strong>${leg.arrival_time ? `<div style="color:#E74C3C;font-weight:600;">Arr: ${leg.arrival_time}</div>` : ''}</div>`;
-            L.circleMarker(b, { radius: 6, color: '#2E5090', fillColor: '#fff', weight: 2 }).addTo(routeLayerGroup).bindPopup(popupB);
+            const popupB = `<div><strong>${leg.destination_stop_name || leg.to_stop || leg.destination_stop_id || ''}</strong>${leg.arrival_time ? `<div class="popup-arrive-time">Arr: ${leg.arrival_time}</div>` : ''}</div>`;
+            L.circleMarker(b, { radius: 6, color: legColor, fillColor: '#fff', weight: 2 }).addTo(routeLayerGroup).bindPopup(popupB);
         }
-        // Draw a straight line for this (non-walking) leg
+        // Draw route for this (non-walking) leg.
+        // Prefer the geometry that OTP itself used for the planned trip
+        // (leg.otp_waypoints) to avoid mismatches with the route_waypoints
+        // table.  Fall back to the API-server waypoints, then a straight line.
         if (a && b) {
-            L.polyline([a, b], { color: '#F39C12', weight: 4, opacity: 0.85 }).addTo(routeLayerGroup);
+            let waypoints = null;
+            if (leg.otp_waypoints && leg.otp_waypoints.length > 1) {
+                waypoints = leg.otp_waypoints;
+            } else {
+                waypoints = await fetchRouteWaypoints(
+                    leg.route_id, leg.direction,
+                    leg.origin_stop_id, leg.destination_stop_id
+                );
+            }
+            if (waypoints && waypoints.length > 1) {
+                L.polyline(waypoints, { color: legColor, weight: 4, opacity: 0.85 }).addTo(routeLayerGroup);
+            } else {
+                L.polyline([a, b], { color: legColor, weight: 4, opacity: 0.85 }).addTo(routeLayerGroup);
+            }
             lastPoint = b;
         }
 
@@ -1021,10 +1656,22 @@ async function drawJourneyOnMap(journey) {
     }
 }
 
-function renderJourneyList(journeys) {
+function renderJourneyList(journeys, departureDate) {
     const t = translations[currentLang] || translations.en;
+
+    // Format departure date as a human-readable label (e.g. "Tuesday 11 Mar")
+    let departureDayLabel = '';
+    if (departureDate) {
+        // departureDate is "YYYY-MM-DD"; parse as local date to avoid UTC offset issues
+        const [year, month, day] = departureDate.split('-').map(Number);
+        const dateObj = new Date(year, month - 1, day);
+        departureDayLabel = dateObj.toLocaleDateString(
+            currentLang === 'zh' ? 'zh-CN' : 'en-GB',
+            { weekday: 'long', day: 'numeric', month: 'short' }
+        );
+    }
     if (!journeys || journeys.length === 0) {
-        routeContent.innerHTML = `<p style="color: #e74c3c;">${t.noJourneys}</p>`;
+        routeContent.innerHTML = `<p class="journey-no-results">${t.noJourneys}</p>`;
         clearRouteLayers();
         return;
     }
@@ -1053,51 +1700,79 @@ function renderJourneyList(journeys) {
     // Build a compact list with clear departure/arrival times and per-leg details
     const container = document.createElement('div');
     container.className = 'journey-list';
-    container.style.display = 'flex';
-    container.style.flexDirection = 'column';
-    container.style.gap = '12px';
     dedupedJourneys.forEach((j, idx) => {
         const card = document.createElement('div');
         card.className = 'journey-card';
-        card.style.padding = '16px';
-        card.style.backgroundColor = '#ffffff';
-        card.style.border = '1px solid #ddd';
-        card.style.borderRadius = '8px';
-        card.style.boxShadow = '0 2px 4px rgba(0,0,0,0.08)';
-        card.style.transition = 'box-shadow 0.2s';
-        card.addEventListener('mouseenter', () => {
-            card.style.boxShadow = '0 4px 8px rgba(0,0,0,0.12)';
-        });
-        card.addEventListener('mouseleave', () => {
-            card.style.boxShadow = '0 2px 4px rgba(0,0,0,0.08)';
-        });
 
-        // Get all non-walk legs for finding first and last
+        // Get all non-walk legs for finding first and last transit stops
         const busLegs = j.legs && j.legs.filter(l => (l.mode || 'bus') !== 'walk') || [];
-        const firstLeg = busLegs.length > 0 ? busLegs[0] : null;
-        const lastLeg = busLegs.length > 0 ? busLegs[busLegs.length - 1] : null;
+        const firstBusLeg = busLegs.length > 0 ? busLegs[0] : null;
+        const lastBusLeg = busLegs.length > 0 ? busLegs[busLegs.length - 1] : null;
+
+        // Use first and last legs (including walks) for overall journey departure/arrival times
+        const allLegs = j.legs || [];
+        const firstLeg = allLegs.length > 0 ? allLegs[0] : null;
+        const lastLeg = allLegs.length > 0 ? allLegs[allLegs.length - 1] : null;
 
         // Header: route summary + departure/arrival
         const header = document.createElement('div');
-        header.style.display = 'flex';
-        header.style.justifyContent = 'space-between';
-        header.style.alignItems = 'flex-start';
-        header.style.marginBottom = '12px';
-        header.style.paddingBottom = '12px';
-        header.style.borderBottom = '1px solid #e8e8e8';
+        header.className = 'journey-card-header';
 
         const summary = document.createElement('div');
-        summary.style.flex = '1';
-        summary.innerHTML = `<div style="font-size:1.08em;color:#2E5090;font-weight:700;line-height:1.45;">${firstLeg && (firstLeg.origin_stop_name || firstLeg.from_stop || firstLeg.origin_stop_id) || ''}</div><div style="font-size:1em;color:#666;margin-top:0.3em;">↓</div><div style="font-size:1.08em;color:#2E5090;font-weight:700;line-height:1.45;">${lastLeg && (lastLeg.destination_stop_name || lastLeg.to_stop || lastLeg.destination_stop_id) || ''}</div>`;
+        summary.className = 'journey-summary';
+
+        const originEl = document.createElement('div');
+        originEl.className = 'journey-stop-name';
+        originEl.textContent = (firstBusLeg && (firstBusLeg.origin_stop_name || firstBusLeg.from_stop || firstBusLeg.origin_stop_id)) || '';
+
+        const arrowEl = document.createElement('div');
+        arrowEl.className = 'journey-stop-arrow';
+        arrowEl.textContent = '↓';
+
+        const destEl = document.createElement('div');
+        destEl.className = 'journey-stop-name';
+        destEl.textContent = (lastBusLeg && (lastBusLeg.destination_stop_name || lastBusLeg.to_stop || lastBusLeg.destination_stop_id)) || '';
+
+        summary.appendChild(originEl);
+        summary.appendChild(arrowEl);
+        summary.appendChild(destEl);
 
         const times = document.createElement('div');
-        times.style.textAlign = 'right';
-        times.style.fontSize = '1em';
-        times.style.lineHeight = '1.6';
-        // Extract departure time ONLY from first leg, arrival time ONLY from last leg
-        const depText = firstLeg && firstLeg.departure_time || '';
-        const arrText = lastLeg && lastLeg.arrival_time || '';
-        times.innerHTML = `<div style="margin-bottom:0.35em;"><span style="display:inline-block;font-weight:800;color:#1e8449;font-size:0.95em;text-transform:uppercase;letter-spacing:0.03em;">${t.departs}</span><div style="font-size:1.5em;font-weight:800;color:#1e8449;margin-top:0.1em;line-height:1.2;">${depText}</div></div><div style="margin-top:0.6em;"><span style="display:inline-block;font-weight:800;color:#c0392b;font-size:0.95em;text-transform:uppercase;letter-spacing:0.03em;">${t.arrives}</span><div style="font-size:1.5em;font-weight:800;color:#c0392b;margin-top:0.1em;line-height:1.2;">${arrText}</div></div>`;
+        times.className = 'journey-times';
+
+        if (departureDayLabel) {
+            const dayLabel = document.createElement('div');
+            dayLabel.className = 'journey-day-label';
+            dayLabel.textContent = departureDayLabel;
+            times.appendChild(dayLabel);
+        }
+
+        // Departure block
+        const depBlock = document.createElement('div');
+        depBlock.className = 'journey-departs-block';
+        const depLabel = document.createElement('span');
+        depLabel.className = 'journey-departs-label';
+        depLabel.textContent = t.departs;
+        const depTime = document.createElement('div');
+        depTime.className = 'journey-departs-time';
+        depTime.textContent = firstLeg && firstLeg.departure_time || '';
+        depBlock.appendChild(depLabel);
+        depBlock.appendChild(depTime);
+
+        // Arrival block
+        const arrBlock = document.createElement('div');
+        arrBlock.className = 'journey-arrives-block';
+        const arrLabel = document.createElement('span');
+        arrLabel.className = 'journey-arrives-label';
+        arrLabel.textContent = t.arrives;
+        const arrTime = document.createElement('div');
+        arrTime.className = 'journey-arrives-time';
+        arrTime.textContent = lastLeg && lastLeg.arrival_time || '';
+        arrBlock.appendChild(arrLabel);
+        arrBlock.appendChild(arrTime);
+
+        times.appendChild(depBlock);
+        times.appendChild(arrBlock);
 
         header.appendChild(summary);
         header.appendChild(times);
@@ -1106,17 +1781,10 @@ function renderJourneyList(journeys) {
 
         // Per-leg details
         const legsEl = document.createElement('div');
-        legsEl.style.marginTop = '0';
-        legsEl.style.fontSize = '1em';
-        legsEl.style.color = '#555';
+        legsEl.className = 'journey-legs';
 
         const ul = document.createElement('ul');
-        ul.style.paddingLeft = '0';
-        ul.style.margin = '0';
-        ul.style.listStyle = 'none';
-        ul.style.display = 'flex';
-        ul.style.flexDirection = 'column';
-        ul.style.gap = '8px';
+        ul.className = 'journey-legs-list';
 
         // Deduplicate consecutive identical legs
         const rawLegs = j.legs || [];
@@ -1138,17 +1806,89 @@ function renderJourneyList(journeys) {
 
         (dedupedLegs || []).forEach((leg) => {
             const li = document.createElement('li');
-            li.style.padding = '10px 12px';
-            li.style.backgroundColor = '#f8f9fa';
-            li.style.borderRadius = '6px';
-            li.style.borderLeft = '3px solid #2E5090';
+            li.className = 'journey-leg';
             if ((leg.mode || 'bus') === 'walk') {
-                li.style.borderLeftColor = '#95a5a6';
-                li.innerHTML = `<span style="color:#7f8c8d;font-weight:700;font-size:1em;">🚶 ${t.walk}:</span> <span style="color:#555;font-size:1em;">${leg.from_stop || leg.from || ''} → ${leg.to_stop || leg.to || leg.to_stop || ''}</span>${leg.distance_km ? ` <span style="color:#999;font-size:0.92em;">(${leg.distance_km} km)</span>` : ''}`;
+                li.classList.add('journey-leg--walk');
+
+                const walkLabel = document.createElement('span');
+                walkLabel.className = 'journey-leg-walk-label';
+                walkLabel.textContent = `🚶 ${t.walk}: `;
+
+                const walkDetail = document.createElement('span');
+                walkDetail.className = 'journey-leg-walk-detail';
+                walkDetail.textContent = `${leg.from_stop || leg.from || ''} → ${leg.to_stop || leg.to || leg.to_stop || ''}`;
+
+                li.appendChild(walkLabel);
+                li.appendChild(walkDetail);
+
+                if (leg.distance_km) {
+                    const distEl = document.createElement('span');
+                    distEl.className = 'journey-leg-walk-distance';
+                    distEl.textContent = ` (${leg.distance_km} km)`;
+                    li.appendChild(distEl);
+                }
+
+                if (leg.departure_time || leg.arrival_time) {
+                    const walkTimesDiv = document.createElement('div');
+                    walkTimesDiv.className = 'journey-leg-times';
+                    if (leg.departure_time) {
+                        const depSpan = document.createElement('span');
+                        depSpan.className = 'journey-leg-depart';
+                        depSpan.textContent = leg.departure_time;
+                        walkTimesDiv.appendChild(depSpan);
+                    }
+                    if (leg.departure_time && leg.arrival_time) {
+                        const sepSpan = document.createElement('span');
+                        sepSpan.className = 'journey-leg-sep';
+                        sepSpan.textContent = ' → ';
+                        walkTimesDiv.appendChild(sepSpan);
+                    }
+                    if (leg.arrival_time) {
+                        const arrSpan = document.createElement('span');
+                        arrSpan.className = 'journey-leg-arrive';
+                        arrSpan.textContent = leg.arrival_time;
+                        walkTimesDiv.appendChild(arrSpan);
+                    }
+                    li.appendChild(walkTimesDiv);
+                }
             } else {
                 const route = leg.route_name ? `${leg.route_name}` : (leg.route_id || 'Route');
-                const timesStr = `${leg.departure_time ? `<span style="color:#1e8449;font-size:1.08em;font-weight:800;">${leg.departure_time}</span>` : ''}${leg.departure_time && leg.arrival_time ? ' <span style="color:#999;">→</span> ' : ''}${leg.arrival_time ? `<span style="color:#c0392b;font-size:1.08em;font-weight:800;">${leg.arrival_time}</span>` : ''}`;
-                li.innerHTML = `<div style="margin-bottom:0.35em;"><strong style="font-size:1.22em;color:#2E5090;">🚌 ${t.bus} ${route}</strong></div><div style="color:#666;font-size:1em;line-height:1.5;">${leg.origin_stop_name || leg.from_stop || leg.origin_stop_id || ''} → ${leg.destination_stop_name || leg.to_stop || leg.destination_stop_id || ''}</div><div style="margin-top:0.35em;">${timesStr}</div>`;
+
+                const routeDiv = document.createElement('div');
+                routeDiv.className = 'journey-leg-route';
+                const routeStrong = document.createElement('strong');
+                routeStrong.textContent = `🚌 ${t.bus} ${route}`;
+                routeDiv.appendChild(routeStrong);
+
+                const stopsDiv = document.createElement('div');
+                stopsDiv.className = 'journey-leg-stops';
+                stopsDiv.textContent = `${leg.origin_stop_name || leg.from_stop || leg.origin_stop_id || ''} → ${leg.destination_stop_name || leg.to_stop || leg.destination_stop_id || ''}`;
+
+                const timesDiv = document.createElement('div');
+                timesDiv.className = 'journey-leg-times';
+
+                if (leg.departure_time) {
+                    const depSpan = document.createElement('span');
+                    depSpan.className = 'journey-leg-depart';
+                    depSpan.textContent = leg.departure_time;
+                    timesDiv.appendChild(depSpan);
+                }
+                if (leg.departure_time && leg.arrival_time) {
+                    const sepSpan = document.createElement('span');
+                    sepSpan.className = 'journey-leg-sep';
+                    sepSpan.textContent = ' → ';
+                    timesDiv.appendChild(sepSpan);
+                }
+                if (leg.arrival_time) {
+                    const arrSpan = document.createElement('span');
+                    arrSpan.className = 'journey-leg-arrive';
+                    arrSpan.textContent = leg.arrival_time;
+                    timesDiv.appendChild(arrSpan);
+                }
+
+                li.appendChild(routeDiv);
+                li.appendChild(stopsDiv);
+                li.appendChild(timesDiv);
             }
             ul.appendChild(li);
         });
@@ -1156,9 +1896,7 @@ function renderJourneyList(journeys) {
         card.appendChild(legsEl);
 
         const btnRow = document.createElement('div');
-        btnRow.style.marginTop = '12px';
-        btnRow.style.paddingTop = '12px';
-        btnRow.style.borderTop = '1px solid #e8e8e8';
+        btnRow.className = 'journey-btn-row';
         const viewBtn = document.createElement('button');
         viewBtn.textContent = t.viewOnMap;
         viewBtn.className = 'plan-route-btn';
@@ -1184,6 +1922,7 @@ planRouteBtn.addEventListener('click', async () => {
     const pathfinding = document.getElementById('pathfinding').value;
     const walkingSpeed = document.getElementById('walkingSpeed').value;
     const departureTimeInput = document.getElementById('departureTime').value;
+    const timeType = document.getElementById('timeType').value;
 
     // Ensure typed inputs are resolved to stops if possible
     await ensureSelectedFromInput(true);
@@ -1218,16 +1957,24 @@ planRouteBtn.addEventListener('click', async () => {
         if (parts.length === 2) { body.destination_lat = parseFloat(parts[0]); body.destination_lon = parseFloat(parts[1]); }
     }
 
-    // Add optional params (not presently used by backend but kept for future)
+    // Add request parameters
     body.preference = pathfinding;
     body.walking_speed = walkingSpeed;
+    body.arrive_by = (timeType === 'arrive-before');
     if (departureTimeInput) {
-        body.departure_time = departureTimeInput;
+        // datetime-local value is "YYYY-MM-DDTHH:MM" — split into date and time
+        const tIdx = departureTimeInput.indexOf('T');
+        if (tIdx !== -1) {
+            body.departure_date = departureTimeInput.slice(0, tIdx);
+            body.departure_time = departureTimeInput.slice(tIdx + 1);
+        } else {
+            body.departure_time = departureTimeInput;
+        }
     }
 
     // Basic validation
     if ((!body.origin_stop_id && (body.origin_lat == null || body.origin_lon == null)) || (!body.destination_stop_id && (body.destination_lat == null || body.destination_lon == null))) {
-        routeContent.innerHTML = `<p style="color: #e74c3c;">${t.selectValidPoints}</p>`;
+        routeContent.innerHTML = `<p class="journey-no-results">${t.selectValidPoints}</p>`;
         return;
     }
 
@@ -1246,7 +1993,7 @@ planRouteBtn.addEventListener('click', async () => {
         const data = await res.json();
         // DEBUG console.log('Journey response received:', JSON.stringify(data, null, 2));
         // data.journeys is an array
-        renderJourneyList(data.journeys || []);
+        renderJourneyList(data.journeys || [], data.departure_date || null);
         // Auto-collapse planner
         const routePlanner = document.querySelector('.route-planner');
         const plannerToggle = document.getElementById('plannerToggle');
@@ -1256,7 +2003,7 @@ planRouteBtn.addEventListener('click', async () => {
         }
     } catch (err) {
         console.error('Plan route error:', err);
-        routeContent.innerHTML = `<p style="color:#e74c3c;">${t.routePlanningError}: ${err.message}</p>`;
+        routeContent.innerHTML = `<p class="journey-no-results">${t.routePlanningError}: ${err.message}</p>`;
         showNotification(t.routePlanningFailed);
         clearRouteLayers();
     }
