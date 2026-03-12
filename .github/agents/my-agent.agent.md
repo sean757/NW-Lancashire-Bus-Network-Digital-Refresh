@@ -6,6 +6,7 @@
 
 name:Transport Application Feature Engineer
 description:This agent will implement/update features for the transport application that is being developed within this repository.
+tools:["execute", "read", "edit", "search", "agent", "web", "todo"]
 ---
 
 # Transport Application Feature Engineer
