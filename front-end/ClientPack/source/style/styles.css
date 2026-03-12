@@ -36,6 +36,39 @@
     --border-color: #ddd;
     --white: #ffffff;
     --shadow: rgba(0, 0, 0, 0.1);
+
+    /* Muted / dimmer text */
+    --text-muted: #666;
+    --text-dimmer: #555;
+
+    /* Light border used inside cards */
+    --border-light: #e8e8e8;
+
+    /* Error / no-results color */
+    --error-color: #e74c3c;
+
+    /* Journey widget */
+    --journey-stop-color: #2E5090;
+    --journey-departs-color: #1e8449;
+    --journey-arrives-color: #c0392b;
+    --journey-leg-bg: #f8f9fa;
+    --journey-leg-border: #2E5090;
+    --journey-walk-border: #95a5a6;
+    --journey-walk-label-color: #7f8c8d;
+
+    /* Map overlays */
+    --map-instructions-bg: rgba(46, 80, 144, 0.9);
+    --map-zoom-hint-bg: rgba(16, 35, 69, 0.88);
+    --map-click-hint-bg: rgba(39, 100, 180, 0.88);
+
+    /* Button hover / darker accent */
+    --accent-color-hover: #229954;
+
+    /* Bus stop popup buttons */
+    --bus-start-color: #27ae60;
+    --bus-start-hover: #1e8449;
+    --bus-end-color: #e74c3c;
+    --bus-end-hover: #c0392b;
 }
 
 * {
@@ -304,7 +337,7 @@ body {
 }
 
 .plan-route-btn:hover {
-    background-color: #229954;
+    background-color: var(--accent-color-hover);
 }
 
 /* Map Container */
@@ -330,7 +363,7 @@ body {
     top: 10px;
     left: 50%;
     transform: translateX(-50%);
-    background-color: rgba(46, 80, 144, 0.9);
+    background-color: var(--map-instructions-bg);
     color: white;
     padding: 8px 16px;
     border-radius: 4px;
@@ -353,11 +386,11 @@ body {
 }
 
 .route-marker.start {
-    background-color: #27AE60;
+    background-color: var(--bus-start-color);
 }
 
 .route-marker.end {
-    background-color: #E74C3C;
+    background-color: var(--bus-end-color);
 }
 
 /* Route Display Panel */
@@ -488,11 +521,10 @@ body {
     cursor: pointer;
     width: 100%;
     transition: background-color 0.3s;
-    background-color: #229954;
 }
 
 .save-settings-btn:hover {
-    background-color: #229954;
+    background-color: var(--accent-color-hover);
 }
 
 /* Accessibility - Font Sizes */
@@ -523,6 +555,39 @@ body.high-contrast {
     --border-color: #000000;
     --white: #ffffff;
     --save: #ffffff;
+
+    /* Muted / dimmer text */
+    --text-muted: #000000;
+    --text-dimmer: #000000;
+
+    /* Light border used inside cards */
+    --border-light: #000000;
+
+    /* Error / no-results color */
+    --error-color: #880000;
+
+    /* Journey widget */
+    --journey-stop-color: #000000;
+    --journey-departs-color: #007700;
+    --journey-arrives-color: #880000;
+    --journey-leg-bg: #e0e0e0;
+    --journey-leg-border: #000000;
+    --journey-walk-border: #444444;
+    --journey-walk-label-color: #000000;
+
+    /* Map overlays */
+    --map-instructions-bg: rgba(0, 0, 0, 0.9);
+    --map-zoom-hint-bg: rgba(0, 0, 0, 0.9);
+    --map-click-hint-bg: rgba(0, 0, 0, 0.9);
+
+    /* Button hover / darker accent */
+    --accent-color-hover: #005500;
+
+    /* Bus stop popup buttons */
+    --bus-start-color: #007700;
+    --bus-start-hover: #005500;
+    --bus-end-color: #880000;
+    --bus-end-hover: #660000;
 }
 
 body.high-contrast .input-group input,
@@ -605,7 +670,7 @@ body.high-contrast .input-group select {
 
 .temp-feels {
     font-size: 10px;
-    color: #666;
+    color: var(--text-muted);
     margin-top: 4px;
 }
 
@@ -639,7 +704,7 @@ body.high-contrast .input-group select {
 
 .detail-label {
     font-size: 12px;
-    color: #666;
+    color: var(--text-muted);
 }
 
 .detail-value {
@@ -650,7 +715,7 @@ body.high-contrast .input-group select {
 
 .weather-error {
     text-align: center;
-    color: #e74c3c;
+    color: var(--error-color);
     padding: 10px;
 }
 
@@ -860,27 +925,27 @@ body.high-contrast .input-group select {
 }
 
 .bus-stop-popup-btn--start {
-    background-color: #27ae60;
-    color: #fff;
+    background-color: var(--bus-start-color);
+    color: var(--white);
 }
 
 .bus-stop-popup-btn--start:hover {
-    background-color: #1e8449;
+    background-color: var(--bus-start-hover);
 }
 
 .bus-stop-popup-btn--end {
-    background-color: #e74c3c;
-    color: #fff;
+    background-color: var(--bus-end-color);
+    color: var(--white);
 }
 
 .bus-stop-popup-btn--end:hover {
-    background-color: #c0392b;
+    background-color: var(--bus-end-hover);
 }
 
 /* Zoom hint shown at bottom-left when below BUS_STOP_ZOOM_THRESHOLD */
 .bus-stop-zoom-hint {
-    background: rgba(16, 35, 69, 0.88);
-    color: #fff;
+    background: var(--map-zoom-hint-bg);
+    color: var(--white);
     padding: 7px 12px;
     border-radius: 5px;
     font-size: 13px;
@@ -894,8 +959,8 @@ body.high-contrast .input-group select {
 
 /* Map click hint – shows whether the next click sets start, end, or resets start */
 .map-click-hint {
-    background: rgba(39, 100, 180, 0.88);
-    color: #fff;
+    background: var(--map-click-hint-bg);
+    color: var(--white);
     padding: 7px 12px;
     border-radius: 5px;
     font-size: 13px;
@@ -904,4 +969,213 @@ body.high-contrast .input-group select {
     white-space: nowrap;
     margin-bottom: 10px;
     margin-right: 10px;
+}
+
+/* ── Journey List / Cards ─────────────────────────────────────────────────── */
+
+/* Error message shown when no journeys are found */
+.journey-no-results {
+    color: var(--error-color);
+}
+
+/* Outer flex column that holds all journey cards */
+.journey-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+/* Individual journey card */
+.journey-card {
+    padding: 16px;
+    background-color: var(--white);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    box-shadow: 0 2px 4px var(--shadow);
+    transition: box-shadow 0.2s;
+}
+
+.journey-card:hover {
+    box-shadow: 0 4px 8px var(--shadow);
+}
+
+/* Card header: origin/destination summary + departure/arrival times */
+.journey-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 12px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border-light);
+}
+
+.journey-summary {
+    flex: 1;
+}
+
+.journey-stop-name {
+    font-size: 1.08em;
+    color: var(--journey-stop-color);
+    font-weight: 700;
+    line-height: 1.45;
+}
+
+.journey-stop-arrow {
+    font-size: 1em;
+    color: var(--text-muted);
+    margin-top: 0.3em;
+}
+
+/* Right-hand time column */
+.journey-times {
+    text-align: right;
+    font-size: 1em;
+    line-height: 1.6;
+}
+
+.journey-day-label {
+    font-size: 0.82em;
+    color: var(--text-dimmer);
+    margin-bottom: 0.2em;
+    font-weight: 600;
+}
+
+.journey-departs-block {
+    margin-bottom: 0.35em;
+}
+
+.journey-arrives-block {
+    margin-top: 0.6em;
+}
+
+.journey-departs-label {
+    display: inline-block;
+    font-weight: 800;
+    color: var(--journey-departs-color);
+    font-size: 0.95em;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+
+.journey-arrives-label {
+    display: inline-block;
+    font-weight: 800;
+    color: var(--journey-arrives-color);
+    font-size: 0.95em;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+
+.journey-departs-time {
+    font-size: 1.5em;
+    font-weight: 800;
+    color: var(--journey-departs-color);
+    margin-top: 0.1em;
+    line-height: 1.2;
+}
+
+.journey-arrives-time {
+    font-size: 1.5em;
+    font-weight: 800;
+    color: var(--journey-arrives-color);
+    margin-top: 0.1em;
+    line-height: 1.2;
+}
+
+/* Legs section */
+.journey-legs {
+    margin-top: 0;
+    font-size: 1em;
+    color: var(--text-dimmer);
+}
+
+.journey-legs-list {
+    padding-left: 0;
+    margin: 0;
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+/* Individual leg row */
+.journey-leg {
+    padding: 10px 12px;
+    background-color: var(--journey-leg-bg);
+    border-radius: 6px;
+    border-left: 3px solid var(--journey-leg-border);
+}
+
+.journey-leg--walk {
+    border-left-color: var(--journey-walk-border);
+}
+
+.journey-leg-walk-label {
+    color: var(--journey-walk-label-color);
+    font-weight: 700;
+    font-size: 1em;
+}
+
+.journey-leg-walk-detail {
+    color: var(--text-dimmer);
+    font-size: 1em;
+}
+
+.journey-leg-walk-distance {
+    color: var(--text-muted);
+    font-size: 0.92em;
+}
+
+.journey-leg-route {
+    display: block;
+    margin-bottom: 0.35em;
+}
+
+.journey-leg-route strong {
+    font-size: 1.22em;
+    color: var(--journey-stop-color);
+}
+
+.journey-leg-stops {
+    color: var(--text-muted);
+    font-size: 1em;
+    line-height: 1.5;
+}
+
+.journey-leg-times {
+    margin-top: 0.35em;
+}
+
+.journey-leg-depart {
+    color: var(--journey-departs-color);
+    font-size: 1.08em;
+    font-weight: 800;
+}
+
+.journey-leg-arrive {
+    color: var(--journey-arrives-color);
+    font-size: 1.08em;
+    font-weight: 800;
+}
+
+.journey-leg-sep {
+    color: var(--text-muted);
+}
+
+/* "View on map" button row at bottom of each card */
+.journey-btn-row {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border-light);
+}
+
+/* Popup stop-time colours (inside Leaflet popups) */
+.popup-depart-time {
+    color: var(--journey-departs-color);
+    font-weight: 600;
+}
+
+.popup-arrive-time {
+    color: var(--journey-arrives-color);
+    font-weight: 600;
 }

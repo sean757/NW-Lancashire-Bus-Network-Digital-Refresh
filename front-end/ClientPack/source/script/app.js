@@ -1303,11 +1303,11 @@ async function drawJourneyOnMap(journey) {
         if (b) polylinePoints.push(b);
         // Draw marker for origin and destination of this leg
         if (a) {
-            const popupA = `<div><strong>${leg.origin_stop_name || leg.from_stop || leg.origin_stop_id || ''}</strong>${leg.departure_time ? `<div style="color:#27AE60;font-weight:600;">Dep: ${leg.departure_time}</div>` : ''}</div>`;
+            const popupA = `<div><strong>${leg.origin_stop_name || leg.from_stop || leg.origin_stop_id || ''}</strong>${leg.departure_time ? `<div class="popup-depart-time">Dep: ${leg.departure_time}</div>` : ''}</div>`;
             L.circleMarker(a, { radius: 6, color: legColor, fillColor: '#fff', weight: 2 }).addTo(routeLayerGroup).bindPopup(popupA);
         }
         if (b) {
-            const popupB = `<div><strong>${leg.destination_stop_name || leg.to_stop || leg.destination_stop_id || ''}</strong>${leg.arrival_time ? `<div style="color:#E74C3C;font-weight:600;">Arr: ${leg.arrival_time}</div>` : ''}</div>`;
+            const popupB = `<div><strong>${leg.destination_stop_name || leg.to_stop || leg.destination_stop_id || ''}</strong>${leg.arrival_time ? `<div class="popup-arrive-time">Arr: ${leg.arrival_time}</div>` : ''}</div>`;
             L.circleMarker(b, { radius: 6, color: legColor, fillColor: '#fff', weight: 2 }).addTo(routeLayerGroup).bindPopup(popupB);
         }
         // Draw route for this (non-walking) leg.
@@ -1357,7 +1357,7 @@ function renderJourneyList(journeys, departureDate) {
         );
     }
     if (!journeys || journeys.length === 0) {
-        routeContent.innerHTML = `<p style="color: #e74c3c;">${t.noJourneys}</p>`;
+        routeContent.innerHTML = `<p class="journey-no-results">${t.noJourneys}</p>`;
         clearRouteLayers();
         return;
     }
@@ -1386,24 +1386,9 @@ function renderJourneyList(journeys, departureDate) {
     // Build a compact list with clear departure/arrival times and per-leg details
     const container = document.createElement('div');
     container.className = 'journey-list';
-    container.style.display = 'flex';
-    container.style.flexDirection = 'column';
-    container.style.gap = '12px';
     dedupedJourneys.forEach((j, idx) => {
         const card = document.createElement('div');
         card.className = 'journey-card';
-        card.style.padding = '16px';
-        card.style.backgroundColor = '#ffffff';
-        card.style.border = '1px solid #ddd';
-        card.style.borderRadius = '8px';
-        card.style.boxShadow = '0 2px 4px rgba(0,0,0,0.08)';
-        card.style.transition = 'box-shadow 0.2s';
-        card.addEventListener('mouseenter', () => {
-            card.style.boxShadow = '0 4px 8px rgba(0,0,0,0.12)';
-        });
-        card.addEventListener('mouseleave', () => {
-            card.style.boxShadow = '0 2px 4px rgba(0,0,0,0.08)';
-        });
 
         // Get all non-walk legs for finding first and last
         const busLegs = j.legs && j.legs.filter(l => (l.mode || 'bus') !== 'walk') || [];
@@ -1412,28 +1397,63 @@ function renderJourneyList(journeys, departureDate) {
 
         // Header: route summary + departure/arrival
         const header = document.createElement('div');
-        header.style.display = 'flex';
-        header.style.justifyContent = 'space-between';
-        header.style.alignItems = 'flex-start';
-        header.style.marginBottom = '12px';
-        header.style.paddingBottom = '12px';
-        header.style.borderBottom = '1px solid #e8e8e8';
+        header.className = 'journey-card-header';
 
         const summary = document.createElement('div');
-        summary.style.flex = '1';
-        summary.innerHTML = `<div style="font-size:1.08em;color:#2E5090;font-weight:700;line-height:1.45;">${firstLeg && (firstLeg.origin_stop_name || firstLeg.from_stop || firstLeg.origin_stop_id) || ''}</div><div style="font-size:1em;color:#666;margin-top:0.3em;">↓</div><div style="font-size:1.08em;color:#2E5090;font-weight:700;line-height:1.45;">${lastLeg && (lastLeg.destination_stop_name || lastLeg.to_stop || lastLeg.destination_stop_id) || ''}</div>`;
+        summary.className = 'journey-summary';
+
+        const originEl = document.createElement('div');
+        originEl.className = 'journey-stop-name';
+        originEl.textContent = firstLeg && (firstLeg.origin_stop_name || firstLeg.from_stop || firstLeg.origin_stop_id) || '';
+
+        const arrowEl = document.createElement('div');
+        arrowEl.className = 'journey-stop-arrow';
+        arrowEl.textContent = '↓';
+
+        const destEl = document.createElement('div');
+        destEl.className = 'journey-stop-name';
+        destEl.textContent = lastLeg && (lastLeg.destination_stop_name || lastLeg.to_stop || lastLeg.destination_stop_id) || '';
+
+        summary.appendChild(originEl);
+        summary.appendChild(arrowEl);
+        summary.appendChild(destEl);
 
         const times = document.createElement('div');
-        times.style.textAlign = 'right';
-        times.style.fontSize = '1em';
-        times.style.lineHeight = '1.6';
-        // Extract departure time ONLY from first leg, arrival time ONLY from last leg
-        const depText = firstLeg && firstLeg.departure_time || '';
-        const arrText = lastLeg && lastLeg.arrival_time || '';
-        const dayHtml = departureDayLabel
-            ? `<div style="font-size:0.82em;color:#555;margin-bottom:0.2em;font-weight:600;">${departureDayLabel}</div>`
-            : '';
-        times.innerHTML = `${dayHtml}<div style="margin-bottom:0.35em;"><span style="display:inline-block;font-weight:800;color:#1e8449;font-size:0.95em;text-transform:uppercase;letter-spacing:0.03em;">${t.departs}</span><div style="font-size:1.5em;font-weight:800;color:#1e8449;margin-top:0.1em;line-height:1.2;">${depText}</div></div><div style="margin-top:0.6em;"><span style="display:inline-block;font-weight:800;color:#c0392b;font-size:0.95em;text-transform:uppercase;letter-spacing:0.03em;">${t.arrives}</span><div style="font-size:1.5em;font-weight:800;color:#c0392b;margin-top:0.1em;line-height:1.2;">${arrText}</div></div>`;
+        times.className = 'journey-times';
+
+        if (departureDayLabel) {
+            const dayLabel = document.createElement('div');
+            dayLabel.className = 'journey-day-label';
+            dayLabel.textContent = departureDayLabel;
+            times.appendChild(dayLabel);
+        }
+
+        // Departure block
+        const depBlock = document.createElement('div');
+        depBlock.className = 'journey-departs-block';
+        const depLabel = document.createElement('span');
+        depLabel.className = 'journey-departs-label';
+        depLabel.textContent = t.departs;
+        const depTime = document.createElement('div');
+        depTime.className = 'journey-departs-time';
+        depTime.textContent = firstLeg && firstLeg.departure_time || '';
+        depBlock.appendChild(depLabel);
+        depBlock.appendChild(depTime);
+
+        // Arrival block
+        const arrBlock = document.createElement('div');
+        arrBlock.className = 'journey-arrives-block';
+        const arrLabel = document.createElement('span');
+        arrLabel.className = 'journey-arrives-label';
+        arrLabel.textContent = t.arrives;
+        const arrTime = document.createElement('div');
+        arrTime.className = 'journey-arrives-time';
+        arrTime.textContent = lastLeg && lastLeg.arrival_time || '';
+        arrBlock.appendChild(arrLabel);
+        arrBlock.appendChild(arrTime);
+
+        times.appendChild(depBlock);
+        times.appendChild(arrBlock);
 
         header.appendChild(summary);
         header.appendChild(times);
@@ -1442,17 +1462,10 @@ function renderJourneyList(journeys, departureDate) {
 
         // Per-leg details
         const legsEl = document.createElement('div');
-        legsEl.style.marginTop = '0';
-        legsEl.style.fontSize = '1em';
-        legsEl.style.color = '#555';
+        legsEl.className = 'journey-legs';
 
         const ul = document.createElement('ul');
-        ul.style.paddingLeft = '0';
-        ul.style.margin = '0';
-        ul.style.listStyle = 'none';
-        ul.style.display = 'flex';
-        ul.style.flexDirection = 'column';
-        ul.style.gap = '8px';
+        ul.className = 'journey-legs-list';
 
         // Deduplicate consecutive identical legs
         const rawLegs = j.legs || [];
@@ -1474,17 +1487,65 @@ function renderJourneyList(journeys, departureDate) {
 
         (dedupedLegs || []).forEach((leg) => {
             const li = document.createElement('li');
-            li.style.padding = '10px 12px';
-            li.style.backgroundColor = '#f8f9fa';
-            li.style.borderRadius = '6px';
-            li.style.borderLeft = '3px solid #2E5090';
+            li.className = 'journey-leg';
             if ((leg.mode || 'bus') === 'walk') {
-                li.style.borderLeftColor = '#95a5a6';
-                li.innerHTML = `<span style="color:#7f8c8d;font-weight:700;font-size:1em;">🚶 ${t.walk}:</span> <span style="color:#555;font-size:1em;">${leg.from_stop || leg.from || ''} → ${leg.to_stop || leg.to || leg.to_stop || ''}</span>${leg.distance_km ? ` <span style="color:#999;font-size:0.92em;">(${leg.distance_km} km)</span>` : ''}`;
+                li.classList.add('journey-leg--walk');
+
+                const walkLabel = document.createElement('span');
+                walkLabel.className = 'journey-leg-walk-label';
+                walkLabel.textContent = `🚶 ${t.walk}: `;
+
+                const walkDetail = document.createElement('span');
+                walkDetail.className = 'journey-leg-walk-detail';
+                walkDetail.textContent = `${leg.from_stop || leg.from || ''} → ${leg.to_stop || leg.to || leg.to_stop || ''}`;
+
+                li.appendChild(walkLabel);
+                li.appendChild(walkDetail);
+
+                if (leg.distance_km) {
+                    const distEl = document.createElement('span');
+                    distEl.className = 'journey-leg-walk-distance';
+                    distEl.textContent = ` (${leg.distance_km} km)`;
+                    li.appendChild(distEl);
+                }
             } else {
                 const route = leg.route_name ? `${leg.route_name}` : (leg.route_id || 'Route');
-                const timesStr = `${leg.departure_time ? `<span style="color:#1e8449;font-size:1.08em;font-weight:800;">${leg.departure_time}</span>` : ''}${leg.departure_time && leg.arrival_time ? ' <span style="color:#999;">→</span> ' : ''}${leg.arrival_time ? `<span style="color:#c0392b;font-size:1.08em;font-weight:800;">${leg.arrival_time}</span>` : ''}`;
-                li.innerHTML = `<div style="margin-bottom:0.35em;"><strong style="font-size:1.22em;color:#2E5090;">🚌 ${t.bus} ${route}</strong></div><div style="color:#666;font-size:1em;line-height:1.5;">${leg.origin_stop_name || leg.from_stop || leg.origin_stop_id || ''} → ${leg.destination_stop_name || leg.to_stop || leg.destination_stop_id || ''}</div><div style="margin-top:0.35em;">${timesStr}</div>`;
+
+                const routeDiv = document.createElement('div');
+                routeDiv.className = 'journey-leg-route';
+                const routeStrong = document.createElement('strong');
+                routeStrong.textContent = `🚌 ${t.bus} ${route}`;
+                routeDiv.appendChild(routeStrong);
+
+                const stopsDiv = document.createElement('div');
+                stopsDiv.className = 'journey-leg-stops';
+                stopsDiv.textContent = `${leg.origin_stop_name || leg.from_stop || leg.origin_stop_id || ''} → ${leg.destination_stop_name || leg.to_stop || leg.destination_stop_id || ''}`;
+
+                const timesDiv = document.createElement('div');
+                timesDiv.className = 'journey-leg-times';
+
+                if (leg.departure_time) {
+                    const depSpan = document.createElement('span');
+                    depSpan.className = 'journey-leg-depart';
+                    depSpan.textContent = leg.departure_time;
+                    timesDiv.appendChild(depSpan);
+                }
+                if (leg.departure_time && leg.arrival_time) {
+                    const sepSpan = document.createElement('span');
+                    sepSpan.className = 'journey-leg-sep';
+                    sepSpan.textContent = ' → ';
+                    timesDiv.appendChild(sepSpan);
+                }
+                if (leg.arrival_time) {
+                    const arrSpan = document.createElement('span');
+                    arrSpan.className = 'journey-leg-arrive';
+                    arrSpan.textContent = leg.arrival_time;
+                    timesDiv.appendChild(arrSpan);
+                }
+
+                li.appendChild(routeDiv);
+                li.appendChild(stopsDiv);
+                li.appendChild(timesDiv);
             }
             ul.appendChild(li);
         });
@@ -1492,9 +1553,7 @@ function renderJourneyList(journeys, departureDate) {
         card.appendChild(legsEl);
 
         const btnRow = document.createElement('div');
-        btnRow.style.marginTop = '12px';
-        btnRow.style.paddingTop = '12px';
-        btnRow.style.borderTop = '1px solid #e8e8e8';
+        btnRow.className = 'journey-btn-row';
         const viewBtn = document.createElement('button');
         viewBtn.textContent = t.viewOnMap;
         viewBtn.className = 'plan-route-btn';
@@ -1570,7 +1629,7 @@ planRouteBtn.addEventListener('click', async () => {
 
     // Basic validation
     if ((!body.origin_stop_id && (body.origin_lat == null || body.origin_lon == null)) || (!body.destination_stop_id && (body.destination_lat == null || body.destination_lon == null))) {
-        routeContent.innerHTML = `<p style="color: #e74c3c;">${t.selectValidPoints}</p>`;
+        routeContent.innerHTML = `<p class="journey-no-results">${t.selectValidPoints}</p>`;
         return;
     }
 
@@ -1599,7 +1658,7 @@ planRouteBtn.addEventListener('click', async () => {
         }
     } catch (err) {
         console.error('Plan route error:', err);
-        routeContent.innerHTML = `<p style="color:#e74c3c;">${t.routePlanningError}: ${err.message}</p>`;
+        routeContent.innerHTML = `<p class="journey-no-results">${t.routePlanningError}: ${err.message}</p>`;
         showNotification(t.routePlanningFailed);
         clearRouteLayers();
     }
