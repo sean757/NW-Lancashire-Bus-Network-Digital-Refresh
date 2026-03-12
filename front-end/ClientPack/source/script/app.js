@@ -184,6 +184,12 @@ const BUS_STOP_ZOOM_THRESHOLD = 14;
 // Debounce timer for updateBusStopMarkers
 let busStopUpdateTimer = null;
 
+// Live bus markers layer and refresh state
+let liveBusLayerGroup = null;
+let liveBusRefreshInterval = null;
+let liveBusRefreshTimerControl = null;
+const LIVE_BUS_REFRESH_INTERVAL_MS = 30000; // 30 seconds
+
 // DOM selectors
 let fromInput = document.getElementById('startPoint');
 let toInput = document.getElementById('endPoint');
@@ -680,6 +686,9 @@ function initializeLeafletMap() {
         }
         updateMapClickHint();
     });
+
+    // Start live bus tracking with 30-second auto-refresh
+    startLiveBusRefresh();
 }
 
 /**
@@ -799,6 +808,174 @@ async function updateBusStopMarkers() {
     });
 }
 
+
+/**
+ * Fetch live bus positions from the backend SIRI proxy and render them on the
+ * map as animated bus icons.  Each bus popup shows the vehicle ID and the
+ * line/route it is operating.
+ */
+async function updateLiveBusMarkers() {
+    if (!map) return;
+
+    let data;
+    try {
+        const res = await fetch(`${apiUrl}/disruptions/live/vehicles`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        data = await res.json();
+    } catch (err) {
+        console.warn('Failed to fetch live bus positions:', err);
+        return;
+    }
+
+    const vehicles = (data && data.vehicles) ? data.vehicles : [];
+
+    if (!liveBusLayerGroup) {
+        liveBusLayerGroup = L.layerGroup().addTo(map);
+    } else {
+        liveBusLayerGroup.clearLayers();
+    }
+
+    vehicles.forEach((bus) => {
+        const lat = bus.latitude;
+        const lon = bus.longitude;
+        if (isNaN(lat) || isNaN(lon)) return;
+
+        const rotation = bus.bearing || 0;
+        const icon = L.divIcon({
+            className: 'live-bus-icon',
+            html: `<div class="live-bus-icon__inner" style="transform:rotate(${rotation}deg)" aria-hidden="true">
+                <svg xmlns="http://www.w3.org/2000/svg" width="34" height="34" viewBox="0 0 34 34" role="img" aria-label="Live bus">
+                    <circle cx="17" cy="17" r="16" fill="#F39C12" stroke="white" stroke-width="2.5"/>
+                    <text x="17" y="14" font-family="Arial,sans-serif" font-size="8" font-weight="bold" fill="white" text-anchor="middle">BUS</text>
+                    <rect x="9" y="15" width="16" height="9" rx="2" fill="white" opacity="0.9"/>
+                    <rect x="10" y="16" width="6" height="4" rx="1" fill="#F39C12"/>
+                    <rect x="18" y="16" width="6" height="4" rx="1" fill="#F39C12"/>
+                    <circle cx="12" cy="25" r="1.5" fill="white"/>
+                    <circle cx="22" cy="25" r="1.5" fill="white"/>
+                </svg>
+            </div>`,
+            iconSize: [34, 34],
+            iconAnchor: [17, 17],
+            popupAnchor: [0, -20],
+        });
+
+        const lineName = bus.line_name || bus.line_ref || 'Unknown';
+        const marker = L.marker([lat, lon], {
+            icon,
+            title: `Bus ${bus.vehicle_id} – Line ${lineName}`,
+            alt: `Live bus: vehicle ${bus.vehicle_id} on line ${lineName}`,
+            zIndexOffset: 500,
+        });
+
+        const popupEl = document.createElement('div');
+        popupEl.className = 'live-bus-popup';
+
+        const titleEl = document.createElement('strong');
+        titleEl.textContent = `Live Bus`;
+        popupEl.appendChild(titleEl);
+
+        const lineEl = document.createElement('p');
+        lineEl.className = 'live-bus-popup__line';
+        lineEl.textContent = `Line: ${lineName}`;
+        popupEl.appendChild(lineEl);
+
+        const vehicleEl = document.createElement('p');
+        vehicleEl.className = 'live-bus-popup__vehicle';
+        vehicleEl.textContent = `Vehicle: ${bus.vehicle_id}`;
+        popupEl.appendChild(vehicleEl);
+
+        const operatorEl = document.createElement('p');
+        operatorEl.className = 'live-bus-popup__operator';
+        operatorEl.textContent = `Operator: ${bus.operator}`;
+        popupEl.appendChild(operatorEl);
+
+        marker.bindPopup(popupEl, { maxWidth: 220 });
+
+        marker.on('click', (e) => {
+            L.DomEvent.stopPropagation(e.originalEvent);
+        });
+
+        liveBusLayerGroup.addLayer(marker);
+    });
+}
+
+
+/**
+ * Start the live-bus auto-refresh loop and add the countdown timer control to
+ * the top-left corner of the map.  Calling this more than once is safe – the
+ * existing interval and control will be cleared first.
+ */
+function startLiveBusRefresh() {
+    if (!map) return;
+
+    // Clear any previous interval
+    if (liveBusRefreshInterval) {
+        clearInterval(liveBusRefreshInterval);
+        liveBusRefreshInterval = null;
+    }
+
+    // Remove previous timer control if present
+    if (liveBusRefreshTimerControl) {
+        liveBusRefreshTimerControl.remove();
+        liveBusRefreshTimerControl = null;
+    }
+
+    const INTERVAL_SEC = LIVE_BUS_REFRESH_INTERVAL_MS / 1000;
+    let secondsLeft = INTERVAL_SEC;
+
+    // Leaflet control that shows a countdown ring
+    liveBusRefreshTimerControl = L.control({ position: 'topleft' });
+    liveBusRefreshTimerControl.onAdd = function () {
+        const container = L.DomUtil.create('div', 'live-bus-refresh-timer');
+        container.setAttribute('aria-live', 'polite');
+        container.setAttribute('aria-label', 'Live bus refresh timer');
+        container.innerHTML = _buildTimerHTML(INTERVAL_SEC, INTERVAL_SEC);
+        return container;
+    };
+    liveBusRefreshTimerControl.addTo(map);
+
+    function tick() {
+        secondsLeft -= 1;
+        const timerEl = document.querySelector('.live-bus-refresh-timer');
+        if (timerEl) {
+            timerEl.innerHTML = _buildTimerHTML(secondsLeft, INTERVAL_SEC);
+        }
+        if (secondsLeft <= 0) {
+            secondsLeft = INTERVAL_SEC;
+            updateLiveBusMarkers();
+        }
+    }
+
+    // Initial fetch immediately
+    updateLiveBusMarkers();
+
+    // Countdown tick every second
+    liveBusRefreshInterval = setInterval(tick, 1000);
+}
+
+
+/** Build the SVG countdown ring HTML for the refresh timer control. */
+function _buildTimerHTML(secondsLeft, total) {
+    const RADIUS = 16;
+    const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
+    const fraction = Math.max(0, secondsLeft / total);
+    const dashOffset = CIRCUMFERENCE * (1 - fraction);
+    const displaySec = Math.max(0, secondsLeft);
+
+    return `<div class="live-bus-refresh-timer__inner" title="Live buses refresh in ${displaySec}s">
+        <svg width="44" height="44" viewBox="0 0 44 44" role="img" aria-label="Refresh in ${displaySec} seconds">
+            <circle cx="22" cy="22" r="${RADIUS}" fill="var(--primary-color)" stroke="rgba(255,255,255,0.25)" stroke-width="3"/>
+            <circle cx="22" cy="22" r="${RADIUS}" fill="none" stroke="var(--secondary-color)" stroke-width="3"
+                stroke-dasharray="${CIRCUMFERENCE.toFixed(2)}"
+                stroke-dashoffset="${dashOffset.toFixed(2)}"
+                stroke-linecap="round"
+                transform="rotate(-90 22 22)"/>
+            <text x="22" y="26" font-family="Arial,sans-serif" font-size="11" font-weight="bold"
+                fill="white" text-anchor="middle">${displaySec}</text>
+        </svg>
+        <span class="live-bus-refresh-timer__label" role="img" aria-label="Bus">🚌</span>
+    </div>`;
+}
 
 // Route Planner Toggle functionality
 function initializePlannerToggle() {

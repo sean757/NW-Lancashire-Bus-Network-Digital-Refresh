@@ -1079,6 +1079,86 @@ body.hide-map-hints .map-click-hint {
     display: none !important;
 }
 
+/* ============================================================
+   Live Bus Icons, Popups & Refresh Timer
+   ============================================================ */
+
+/* DivIcon wrapper – strip default Leaflet border/bg */
+.live-bus-icon {
+    background: none;
+    border: none;
+    cursor: pointer;
+    filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.45));
+}
+
+.live-bus-icon__inner {
+    display: inline-block;
+    transform-origin: center center;
+    transition: transform 0.4s ease;
+}
+
+/* Popup shown when a live bus marker is clicked */
+.live-bus-popup {
+    font-family: inherit;
+    font-size: 13px;
+    min-width: 170px;
+}
+
+.live-bus-popup strong {
+    display: block;
+    color: var(--secondary-color, #F39C12);
+    margin-bottom: 6px;
+    font-size: 14px;
+}
+
+.live-bus-popup p {
+    margin: 3px 0;
+    color: var(--text-color, #333);
+    font-size: 13px;
+}
+
+.live-bus-popup__line {
+    font-weight: 700;
+    color: var(--primary-color, #102345) !important;
+}
+
+/* Refresh timer control – top-left corner of the map */
+.live-bus-refresh-timer {
+    background: none;
+    border: none;
+    margin-top: 10px;
+    margin-left: 10px;
+    cursor: default;
+    pointer-events: none;
+    user-select: none;
+}
+
+.live-bus-refresh-timer__inner {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+}
+
+.live-bus-refresh-timer__label {
+    font-size: 14px;
+    line-height: 1;
+    display: block;
+    text-align: center;
+    margin-top: 2px;
+}
+
+/* High-contrast adjustments for live bus elements */
+body.high-contrast .live-bus-popup strong {
+    color: var(--secondary-color);
+}
+
+body.high-contrast .live-bus-popup__line {
+    color: var(--text-color) !important;
+    font-weight: 900;
+}
+
 /* Night-time map tint */
 #map .leaflet-tile,
 #map .leaflet-tile-pane {
