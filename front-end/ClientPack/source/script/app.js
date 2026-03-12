@@ -140,6 +140,7 @@ function addEndMarker(item) {
 
 // Accessible notification function (UI helper)
 function showNotification(message) {
+    if (uiSettings.disableNotifications) return;
     const toast = document.getElementById('notificationToast');
     toast.textContent = message;
     toast.classList.add('show');
@@ -576,7 +577,8 @@ function initializeLeafletMap() {
     map = L.map('map', {
         maxBounds: northLancashireBounds,
         maxBoundsViscosity: 1.0,  // Makes bounds "hard" - prevents dragging outside
-        zoomControl: false
+        zoomControl: false,
+        doubleClickZoom: false
     }).setView([53.7632, -2.7031], 10);
 
     // Add OpenStreetMap tiles
@@ -645,11 +647,11 @@ function initializeLeafletMap() {
     clickHintControl.addTo(map);
     updateMapClickHint();
 
-    // Handle map clicks for start / end point selection.
-    // 1st click  → set start point
-    // 2nd click  → set end point
-    // 3rd+ click → reset start (clear existing end) so the user can pick a new route
-    map.on('click', (e) => {
+    // Handle map double-clicks for start / end point selection.
+    // 1st double-click  → set start point
+    // 2nd double-click  → set end point
+    // 3rd+ double-click → reset start (clear existing end) so the user can pick a new route
+    map.on('dblclick', (e) => {
         const item = makeCustomItem(e.latlng);
         const label = getLabelFromItem(item);
         const t = translations[currentLang] || translations.en;
@@ -908,11 +910,13 @@ const saveUiSettingsBtn = document.getElementById('saveUiSettings');
 const settingsShowWeatherInput = document.getElementById('settingsShowWeather');
 const settingsShowMapHintsInput = document.getElementById('settingsShowMapHints');
 const settingsDarkMapInput = document.getElementById('settingsDarkMap');
+const settingsDisableNotificationsInput = document.getElementById('settingsDisableNotifications');
 
 const defaultUiSettings = {
     showWeather: true,
     showMapHints: true,
     darkMap: false,
+    disableNotifications: false,
 };
 
 let uiSettings = { ...defaultUiSettings };
@@ -947,6 +951,7 @@ function loadUiSettings() {
     if (settingsShowWeatherInput) settingsShowWeatherInput.checked = !!uiSettings.showWeather;
     if (settingsShowMapHintsInput) settingsShowMapHintsInput.checked = !!uiSettings.showMapHints;
     if (settingsDarkMapInput) settingsDarkMapInput.checked = !!uiSettings.darkMap;
+    if (settingsDisableNotificationsInput) settingsDisableNotificationsInput.checked = !!uiSettings.disableNotifications;
     applyUiSettings();
 }
 
@@ -979,6 +984,7 @@ const translations = {
         settingsShowWeather: 'Show weather icon',
         settingsShowMapHints: 'Show map helper pop-ups',
         settingsDarkMap: 'Dark mode map tint',
+        settingsDisableNotifications: 'Disable notification messages',
         settingsSave: 'Save Settings',
         settingsSaved: 'Settings updated successfully!',
         departs: 'DEPARTS',
@@ -995,12 +1001,12 @@ const translations = {
         planningRoute: 'Planning route…',
         routePlanningError: 'Error planning route',
         routePlanningFailed: 'Failed to plan route. See console for details.',
-        clickHintStart: '🖱️ Click the map to set your start point',
-        clickHintEnd: '🖱️ Click the map to set your end point',
-        clickHintReset: '🖱️ Click the map to change your start point',
-        mapClickNotifyStart: 'Start point set. Now click your destination on the map.',
+        clickHintStart: '🖱️ Double-click the map to set your start point',
+        clickHintEnd: '🖱️ Double-click the map to set your end point',
+        clickHintReset: '🖱️ Double-click the map to change your start point',
+        mapClickNotifyStart: 'Start point set. Now double-click your destination on the map.',
         mapClickNotifyEnd: "End point set. Click 'Plan Route' to continue.",
-        mapClickNotifyReset: 'Start point updated. Now click your destination on the map.'
+        mapClickNotifyReset: 'Start point updated. Now double-click your destination on the map.'
     },
     zh: {
         header: '兰开夏郡旅程规划',
@@ -1029,6 +1035,7 @@ const translations = {
         settingsShowWeather: '显示天气图标',
         settingsShowMapHints: '显示地图提示弹窗',
         settingsDarkMap: '地图夜间深色',
+        settingsDisableNotifications: '禁用通知消息',
         settingsSave: '保存设置',
         settingsSaved: '设置更新成功！',
         departs: '出发',
@@ -1045,12 +1052,12 @@ const translations = {
         planningRoute: '正在规划路线…',
         routePlanningError: '路线规划出错',
         routePlanningFailed: '路线规划失败。请查看控制台了解详情。',
-        clickHintStart: '🖱️ 点击地图设置起点',
-        clickHintEnd: '🖱️ 点击地图设置终点',
-        clickHintReset: '🖱️ 点击地图更改起点',
-        mapClickNotifyStart: '起点已设置。请在地图上点击目的地。',
+        clickHintStart: '🖱️ 双击地图设置起点',
+        clickHintEnd: '🖱️ 双击地图设置终点',
+        clickHintReset: '🖱️ 双击地图更改起点',
+        mapClickNotifyStart: '起点已设置。请在地图上双击目的地。',
         mapClickNotifyEnd: '终点已设置。点击"规划路线"继续。',
-        mapClickNotifyReset: '起点已更新。请在地图上点击目的地。'
+        mapClickNotifyReset: '起点已更新。请在地图上双击目的地。'
     }
 };
 
@@ -1105,6 +1112,8 @@ function applyTranslations(lang) {
     if (hintsLabel) hintsLabel.textContent = t.settingsShowMapHints;
     const darkMapLabel = document.querySelector('label[for="settingsDarkMap"]');
     if (darkMapLabel) darkMapLabel.textContent = t.settingsDarkMap;
+    const disableNotificationsLabel = document.querySelector('label[for="settingsDisableNotifications"]');
+    if (disableNotificationsLabel) disableNotificationsLabel.textContent = t.settingsDisableNotifications;
     const settingsSaveBtn = document.getElementById('saveUiSettings');
     if (settingsSaveBtn) settingsSaveBtn.textContent = t.settingsSave;
 
@@ -1141,6 +1150,7 @@ settingsLink.addEventListener('click', (e) => {
     settingsShowWeatherInput.checked = !!uiSettings.showWeather;
     settingsShowMapHintsInput.checked = !!uiSettings.showMapHints;
     if (settingsDarkMapInput) settingsDarkMapInput.checked = !!uiSettings.darkMap;
+    if (settingsDisableNotificationsInput) settingsDisableNotificationsInput.checked = !!uiSettings.disableNotifications;
     settingsModal.classList.add('active');
     sidebar.classList.remove('active');
 });
@@ -1159,6 +1169,7 @@ saveUiSettingsBtn.addEventListener('click', () => {
     uiSettings.showWeather = !!settingsShowWeatherInput.checked;
     uiSettings.showMapHints = !!settingsShowMapHintsInput.checked;
     uiSettings.darkMap = !!(settingsDarkMapInput && settingsDarkMapInput.checked);
+    uiSettings.disableNotifications = !!(settingsDisableNotificationsInput && settingsDisableNotificationsInput.checked);
     localStorage.setItem('ui_settings', JSON.stringify(uiSettings));
     applyUiSettings();
     settingsModal.classList.remove('active');
