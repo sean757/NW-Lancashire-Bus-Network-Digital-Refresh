@@ -6,8 +6,18 @@ from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 from app.database import get_db
+from app.config import settings
 
 router = APIRouter()
+
+
+def _service_bounds_params() -> dict:
+    return {
+        "svc_min_lat": settings.service_min_lat,
+        "svc_max_lat": settings.service_max_lat,
+        "svc_min_lon": settings.service_min_lon,
+        "svc_max_lon": settings.service_max_lon,
+    }
 
 
 @router.get("/")
@@ -19,8 +29,14 @@ async def list_stops(
     db: AsyncSession = Depends(get_db),
 ):
     """List stops with optional filtering by locality and type."""
-    query = "SELECT stop_id, stop_name, locality, bearing, latitude, longitude, stop_type FROM stops WHERE active = TRUE"
-    params = {}
+    query = """
+        SELECT stop_id, stop_name, locality, bearing, latitude, longitude, stop_type
+        FROM stops
+        WHERE active = TRUE
+          AND latitude  BETWEEN :svc_min_lat AND :svc_max_lat
+          AND longitude BETWEEN :svc_min_lon AND :svc_max_lon
+    """
+    params = _service_bounds_params()
 
     if locality:
         query += " AND locality ILIKE :locality"
@@ -50,11 +66,14 @@ async def search_stops(
         SELECT stop_id, stop_name, locality, latitude, longitude, stop_type
         FROM stops
         WHERE active = TRUE
+                    AND latitude  BETWEEN :svc_min_lat AND :svc_max_lat
+                    AND longitude BETWEEN :svc_min_lon AND :svc_max_lon
           AND to_tsvector('english', stop_name) @@ plainto_tsquery('english', :q)
         ORDER BY ts_rank(to_tsvector('english', stop_name), plainto_tsquery('english', :q)) DESC
         LIMIT :limit
     """
-    result = await db.execute(text(query), {"q": q, "limit": limit})
+    params = {"q": q, "limit": limit, **_service_bounds_params()}
+    result = await db.execute(text(query), params)
     rows = result.mappings().all()
 
     # Fallback to ILIKE if full-text search returns nothing
@@ -62,11 +81,17 @@ async def search_stops(
         fallback_query = """
             SELECT stop_id, stop_name, locality, latitude, longitude, stop_type
             FROM stops
-            WHERE active = TRUE AND stop_name ILIKE :pattern
+            WHERE active = TRUE
+              AND latitude  BETWEEN :svc_min_lat AND :svc_max_lat
+              AND longitude BETWEEN :svc_min_lon AND :svc_max_lon
+              AND stop_name ILIKE :pattern
             ORDER BY stop_name
             LIMIT :limit
         """
-        result = await db.execute(text(fallback_query), {"pattern": f"%{q}%", "limit": limit})
+        result = await db.execute(
+            text(fallback_query),
+            {"pattern": f"%{q}%", "limit": limit, **_service_bounds_params()},
+        )
         rows = result.mappings().all()
 
     return [dict(row) for row in rows]
@@ -76,7 +101,8 @@ async def search_stops(
 async def nearby_stops(
     lat: float = Query(..., description="Latitude"),
     lon: float = Query(..., description="Longitude"),
-    radius_km: float = Query(default=1.0, le=10.0, description="Search radius in km"),
+    radius_km: float = Query(default=1.0, le=10.0,
+                             description="Search radius in km"),
     limit: int = Query(default=20, le=100),
     db: AsyncSession = Depends(get_db),
 ):
@@ -106,14 +132,23 @@ async def nearby_stops(
                 )) AS distance_km
             FROM stops
             WHERE active = TRUE
+              AND latitude  BETWEEN :svc_min_lat AND :svc_max_lat
+              AND longitude BETWEEN :svc_min_lon AND :svc_max_lon
         ) AS nearby
         WHERE distance_km <= :radius_km
         ORDER BY distance_km
         LIMIT :limit
     """
-    result = await db.execute(text(query), {
-        "lat": lat, "lon": lon, "radius_km": radius_km, "limit": limit
-    })
+    result = await db.execute(
+        text(query),
+        {
+            "lat": lat,
+            "lon": lon,
+            "radius_km": radius_km,
+            "limit": limit,
+            **_service_bounds_params(),
+        },
+    )
     rows = result.mappings().all()
     return [dict(row) for row in rows]
 
@@ -128,6 +163,16 @@ async def stops_in_bounds(
     db: AsyncSession = Depends(get_db),
 ):
     """Find all active stops within a geographic bounding box."""
+    # Clamp to service area bounds so users can't request stops outside coverage.
+    clamped_min_lat = max(min_lat, settings.service_min_lat)
+    clamped_max_lat = min(max_lat, settings.service_max_lat)
+    clamped_min_lon = max(min_lon, settings.service_min_lon)
+    clamped_max_lon = min(max_lon, settings.service_max_lon)
+
+    # If the requested bounds don't intersect the service area, return no results.
+    if clamped_min_lat > clamped_max_lat or clamped_min_lon > clamped_max_lon:
+        return []
+
     query = """
         SELECT stop_id, stop_name, locality, latitude, longitude, stop_type
         FROM stops
@@ -138,8 +183,8 @@ async def stops_in_bounds(
         LIMIT :limit
     """
     result = await db.execute(text(query), {
-        "min_lat": min_lat, "max_lat": max_lat,
-        "min_lon": min_lon, "max_lon": max_lon,
+        "min_lat": clamped_min_lat, "max_lat": clamped_max_lat,
+        "min_lon": clamped_min_lon, "max_lon": clamped_max_lon,
         "limit": limit,
     })
     rows = result.mappings().all()
@@ -153,8 +198,10 @@ async def get_stop(stop_id: str, db: AsyncSession = Depends(get_db)):
         SELECT stop_id, stop_name, locality, bearing, latitude, longitude, stop_type, created_at
         FROM stops
         WHERE stop_id = :stop_id AND active = TRUE
+          AND latitude  BETWEEN :svc_min_lat AND :svc_max_lat
+          AND longitude BETWEEN :svc_min_lon AND :svc_max_lon
     """
-    result = await db.execute(text(query), {"stop_id": stop_id})
+    result = await db.execute(text(query), {"stop_id": stop_id, **_service_bounds_params()})
     row = result.mappings().first()
 
     if not row:

@@ -1,3 +1,4 @@
+import os
 import requests
 from lxml import etree
 import psycopg2
@@ -11,35 +12,58 @@ DB_CONFIG = {
     "dbname": "transport_db"
 }
 
-# 2. The XML data URL we found earlier
-URL = "https://transport.scc.lancs.ac.uk/nptg/naptan.xml"
+"""Ingest NaPTAN stops into Postgres.
+
+Root cause of "no stops in central Blackpool":
+- The stops table only contained ATCO area code 250 (Lancashire; stop IDs
+    beginning 2500...), so Blackpool Borough stops (ATCO area code 259; stop IDs
+    beginning 2590...) weren't present.
+
+We can fix this by ingesting a national NaPTAN dataset. The project already has
+access to one via the SCC transport API.
+"""
+
+# SCC-hosted national NaPTAN dataset (large); streamed parsing keeps memory usage low.
+NAPTAN_FULL_URL = os.getenv(
+    "NAPTAN_FULL_URL",
+    "https://transport.scc.lancs.ac.uk/nptg/naptan-full.xml",
+)
 
 
 # Removed create_table() - schema is managed by init_db.sql
 
 
 def ingest_data(conn):
-    """Efficiently download and parse XML using lxml.iterparse."""
-    print(f" Downloading and parsing data from {URL}, please wait...")
+    """Download and parse NaPTAN XML using lxml.iterparse (streaming)."""
+    print(
+        f" Downloading and parsing NaPTAN data from {NAPTAN_FULL_URL}, please wait...")
 
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64)",
+        "Accept": "application/xml, text/xml",
     }
 
-    # Use requests to stream the download of the large file
-    response = requests.get(URL, stream=True, headers=headers)
+    response = requests.get(NAPTAN_FULL_URL, stream=True,
+                            headers=headers, timeout=120)
     response.raise_for_status()
-
     response.raw.decode_content = True
 
     # The XML uses Namespaces, which must be included in the tag for iterparse.
-    context = etree.iterparse(response.raw, events=(
-        'end',), tag='{http://www.naptan.org.uk/}StopPoint')
+    context = etree.iterparse(
+        response.raw,
+        events=("end",),
+        tag="{http://www.naptan.org.uk/}StopPoint",
+    )
 
     insert_query = """
-        INSERT INTO stops (stop_id, stop_name, locality, latitude, longitude)
-        VALUES (%s, %s, %s, %s, %s)
-        ON CONFLICT (stop_id) DO NOTHING;
+        INSERT INTO stops (stop_id, stop_name, locality, latitude, longitude, active)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        ON CONFLICT (stop_id) DO UPDATE SET
+            stop_name = EXCLUDED.stop_name,
+            locality = EXCLUDED.locality,
+            latitude = EXCLUDED.latitude,
+            longitude = EXCLUDED.longitude,
+            active = EXCLUDED.active;
     """
 
     count = 0
@@ -53,9 +77,12 @@ def ingest_data(conn):
             lat = elem.findtext('.//{http://www.naptan.org.uk/}Latitude')
             lon = elem.findtext('.//{http://www.naptan.org.uk/}Longitude')
 
+            status = (elem.get("Status") or "").strip().lower()
+            active = status != "inactive"
+
             if atco_code and name and lat and lon:
-                cur.execute(insert_query, (atco_code,
-                            name, locality, lat, lon))
+                cur.execute(insert_query, (atco_code, name,
+                            locality, lat, lon, active))
                 count += 1
 
             # Clean up memory

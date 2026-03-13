@@ -14,6 +14,13 @@ class Settings(BaseSettings):
     app_title: str = "SCC200 Transport API"
     api_prefix: str = "/api/v1"
 
+    # Service area bounds (NW Lancashire)
+    # Defaults align with the frontend Leaflet maxBounds.
+    service_min_lat: float = 53.5
+    service_max_lat: float = 54.3
+    service_min_lon: float = -3.1
+    service_max_lon: float = -2.2
+
     # OpenTripPlanner
     # OTP default port is 8080, but the FastAPI backend also uses 8080.
     # Run OTP on 9090 (--port 9090) and set OTP_URL=http://localhost:9090,
