@@ -211,20 +211,25 @@ def parse_txc_xml(conn, xml_content, operator_code, valid_stops, stop_coords):
 
         sections[section_id] = stops
 
-    # 2. Parse JourneyPatterns — maps pattern_id -> (section_id, direction)
-    patterns = {}
+    # 2. Parse JourneyPatterns — maps pattern_id -> (list_of_section_ids, direction)
     # Also capture optional RouteRef per journey pattern (used for geometry)
+    patterns = {}
     pattern_route_refs = {}
     for service in root.findall('.//txc:Service', namespaces=NS):
         for jp in service.findall('.//txc:JourneyPattern', namespaces=NS):
             jp_id = jp.get('id')
             direction = jp.findtext(
                 'txc:Direction', namespaces=NS) or 'outbound'
-            section_ref = jp.findtext(
-                'txc:JourneyPatternSectionRefs', namespaces=NS)
+            # A JourneyPattern may reference multiple JourneyPatternSectionRefs;
+            # collect them in order rather than taking only the first.
+            section_refs = [
+                (elem.text or '').strip()
+                for elem in jp.findall('txc:JourneyPatternSectionRefs', namespaces=NS)
+                if (elem.text or '').strip()
+            ]
             route_ref = jp.findtext('txc:RouteRef', namespaces=NS)
-            if jp_id and section_ref:
-                patterns[jp_id] = (section_ref, direction)
+            if jp_id and section_refs:
+                patterns[jp_id] = (section_refs, direction)
             if jp_id and route_ref:
                 pattern_route_refs[jp_id] = route_ref
 
@@ -252,13 +257,18 @@ def parse_txc_xml(conn, xml_content, operator_code, valid_stops, stop_coords):
         if links:
             route_sections_geo[sid] = links
 
-    # 2c. Parse Routes — maps Route element id -> RouteSectionRef
+    # 2c. Parse Routes — maps Route element id -> list of RouteSectionRef ids
     routes_to_section = {}
     for route in root.findall('.//txc:Route', namespaces=NS):
         rid = route.get('id')
-        sref = route.findtext('txc:RouteSectionRef', namespaces=NS)
-        if rid and sref:
-            routes_to_section[rid] = sref
+        # A Route may reference multiple RouteSectionRefs; collect them in order.
+        srefs = [
+            (elem.text or '').strip()
+            for elem in route.findall('txc:RouteSectionRef', namespaces=NS)
+            if (elem.text or '').strip()
+        ]
+        if rid and srefs:
+            routes_to_section[rid] = srefs
 
     # 3. Parse Service info
     service_elem = root.find('.//txc:Service', namespaces=NS)
@@ -292,17 +302,19 @@ def parse_txc_xml(conn, xml_content, operator_code, valid_stops, stop_coords):
         # 5. Collect route_stops rows, then batch-insert
         route_stops_seen = set()
         route_stops_batch = []
-        for jp_id, (section_id, direction) in patterns.items():
-            if section_id not in sections:
-                continue
-            for stop_ref, seq, _ in sections[section_id]:
-                if stop_ref not in valid_stops:
+        for jp_id, (section_ids, direction) in patterns.items():
+            # section_ids is a list; iterate sections in order and append their stops
+            for section_id in (section_ids if isinstance(section_ids, (list, tuple)) else [section_ids]):
+                if section_id not in sections:
                     continue
-                key = (route_id, stop_ref, direction, seq)
-                if key not in route_stops_seen:
-                    route_stops_batch.append(
-                        (route_id, stop_ref, seq, direction))
-                    route_stops_seen.add(key)
+                for stop_ref, seq, _ in sections[section_id]:
+                    if stop_ref not in valid_stops:
+                        continue
+                    key = (route_id, stop_ref, direction, seq)
+                    if key not in route_stops_seen:
+                        route_stops_batch.append(
+                            (route_id, stop_ref, seq, direction))
+                        route_stops_seen.add(key)
 
         if route_stops_batch:
             execute_values(cur, """
@@ -315,7 +327,7 @@ def parse_txc_xml(conn, xml_content, operator_code, valid_stops, stop_coords):
         # Only one set of waypoints per (route_id, direction).
         inserted_wp_directions = set()
         waypoints_batch = []
-        for jp_id, (section_id, direction) in patterns.items():
+        for jp_id, (section_ids, direction) in patterns.items():
             wp_key = (route_id, direction)
             if wp_key in inserted_wp_directions:
                 continue
@@ -324,18 +336,29 @@ def parse_txc_xml(conn, xml_content, operator_code, valid_stops, stop_coords):
 
             # Prefer track geometry from RouteSections / Routes if available.
             route_ref = pattern_route_refs.get(jp_id)
-            geo_section_id = routes_to_section.get(
+            geo_section_ids = routes_to_section.get(
                 route_ref) if route_ref else None
-            if geo_section_id and geo_section_id in route_sections_geo:
-                waypoints = _build_waypoints_from_links(
-                    route_sections_geo[geo_section_id], stop_coords
-                )
+            # If multiple route sections are referenced, concatenate their links
+            if geo_section_ids:
+                combined_links = []
+                for gs in (geo_section_ids if isinstance(geo_section_ids, (list, tuple)) else [geo_section_ids]):
+                    links = route_sections_geo.get(gs)
+                    if links:
+                        combined_links.extend(links)
+                if combined_links:
+                    waypoints = _build_waypoints_from_links(
+                        combined_links, stop_coords)
 
             # Fallback: use ordered stop coordinates from the journey pattern.
-            if not waypoints and section_id in sections:
-                waypoints = _build_waypoints_from_stops(
-                    sections[section_id], stop_coords
-                )
+            if not waypoints:
+                # Build a combined stop sequence from all referenced sections
+                combined_stop_seq = []
+                for section_id in (section_ids if isinstance(section_ids, (list, tuple)) else [section_ids]):
+                    if section_id in sections:
+                        combined_stop_seq.extend(sections[section_id])
+                if combined_stop_seq:
+                    waypoints = _build_waypoints_from_stops(
+                        combined_stop_seq, stop_coords)
 
             for seq_num, (lat, lon, stop_id) in enumerate(waypoints):
                 waypoints_batch.append(
@@ -369,8 +392,13 @@ def parse_txc_xml(conn, xml_content, operator_code, valid_stops, stop_coords):
             if not departure_str or not jp_ref or jp_ref not in patterns:
                 continue
 
-            section_id, direction = patterns[jp_ref]
-            if section_id not in sections:
+            section_ids, direction = patterns[jp_ref]
+            # Build the combined stop sequence from all referenced sections
+            combined_stops = []
+            for section_id in (section_ids if isinstance(section_ids, (list, tuple)) else [section_ids]):
+                if section_id in sections:
+                    combined_stops.extend(sections[section_id])
+            if not combined_stops:
                 continue
 
             # Parse days of week
@@ -396,7 +424,7 @@ def parse_txc_xml(conn, xml_content, operator_code, valid_stops, stop_coords):
                 dep_parts[1]), int(dep_parts[2]) if len(dep_parts) > 2 else 0
             cumulative_secs = base_hour * 3600 + base_min * 60 + base_sec
 
-            for i, (stop_ref, seq, run_time) in enumerate(sections[section_id]):
+            for i, (stop_ref, seq, run_time) in enumerate(combined_stops):
                 # The first stop legitimately has zero travel time (it is the
                 # origin).  For every subsequent stop, substitute the placeholder
                 # when the source data provides no run time.
