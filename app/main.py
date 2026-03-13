@@ -9,6 +9,7 @@ from app.config import settings
 from app.database import init_db, close_db
 from app.routers import stops, disruptions, journey, routes
 from app.services.route_cache import route_cache
+from app.services.vehicle_cache import vehicle_cache
 import httpx
 
 
@@ -31,9 +32,13 @@ app.add_middleware(
 @app.on_event("startup")
 async def startup():
     await init_db()
-    # Load route cache and start background refresh
+    # Load route cache and start background refresh (every hour)
     await route_cache.load()
     asyncio.create_task(route_cache.refresh_loop())
+    # Perform an initial vehicle cache fetch then start background refresh (every 30 s).
+    # The initial fetch ensures data is available immediately on first user request.
+    await vehicle_cache.refresh()
+    asyncio.create_task(vehicle_cache.refresh_loop())
 
 
 @app.on_event("shutdown")
