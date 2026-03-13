@@ -2,6 +2,8 @@
 Stops router — endpoints for querying bus stops.
 """
 
+import re
+
 from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
@@ -76,7 +78,31 @@ async def search_stops(
     result = await db.execute(text(query), params)
     rows = result.mappings().all()
 
-    # Fallback to ILIKE if full-text search returns nothing
+    # Fallback 1: token OR-match (so e.g. "Uni Underpass" can match "Underpass")
+    if not rows:
+        tokens = [t for t in re.split(r"\s+", (q or "").strip()) if t]
+        if len(tokens) > 1:
+            or_clauses = " OR ".join(
+                [f"stop_name ILIKE :tok{i}" for i in range(len(tokens))])
+            token_query = f"""
+                SELECT stop_id, stop_name, locality, latitude, longitude, stop_type
+                FROM stops
+                WHERE active = TRUE
+                  AND latitude  BETWEEN :svc_min_lat AND :svc_max_lat
+                  AND longitude BETWEEN :svc_min_lon AND :svc_max_lon
+                  AND ({or_clauses})
+                ORDER BY stop_name
+                LIMIT :limit
+            """
+            token_params = {
+                **_service_bounds_params(),
+                "limit": limit,
+                **{f"tok{i}": f"%{tokens[i]}%" for i in range(len(tokens))},
+            }
+            result = await db.execute(text(token_query), token_params)
+            rows = result.mappings().all()
+
+    # Fallback 2: plain substring match
     if not rows:
         fallback_query = """
             SELECT stop_id, stop_name, locality, latitude, longitude, stop_type
