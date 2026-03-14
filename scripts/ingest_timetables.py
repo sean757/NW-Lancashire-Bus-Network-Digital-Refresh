@@ -26,6 +26,13 @@ DB_CONFIG = {
 # All operators from the project
 OPERATORS = ["ARCT", "BLAC", "KLCO", "SCCU", "SCMY", "NUTT"]
 
+# Preferred Stagecoach regional datasets used to avoid importing all
+# nationwide Stagecoach timetable bundles for SCCU/SCMY ingestion.
+TARGET_STAGECOACH_DESCRIPTIONS = {
+    "Stagecoach Cumbria & North Lancashire",
+    "Stagecoach Merseyside & South Lancashire",
+}
+
 # TransXChange namespace
 NS = {'txc': 'http://www.transxchange.org.uk/'}
 
@@ -497,6 +504,44 @@ def download_and_extract(conn, zip_url, fallback_operator, valid_stops, stop_coo
         log.error("Error processing %s: %s", zip_url, e)
 
 
+def _select_discovery_results(operator, results):
+    """Return filtered discovery rows for operators with targeted Stagecoach regions.
+
+    For SCCU/SCMY we prefer only the two regional datasets by exact description.
+    If one or both of those descriptions are missing, fall back to the full
+    unfiltered operator dataset list.
+    """
+    if operator not in {"SCCU", "SCMY"}:
+        return results
+
+    matching = [
+        item for item in results
+        if (item.get("description") or "").strip() in TARGET_STAGECOACH_DESCRIPTIONS
+    ]
+
+    matched_descriptions = {
+        (item.get("description") or "").strip()
+        for item in matching
+    }
+
+    if matched_descriptions == TARGET_STAGECOACH_DESCRIPTIONS:
+        log.info(
+            "Using targeted Stagecoach datasets for %s (%d records).",
+            operator,
+            len(matching),
+        )
+        return matching
+
+    missing = sorted(TARGET_STAGECOACH_DESCRIPTIONS - matched_descriptions)
+    log.warning(
+        "Target Stagecoach dataset descriptions not fully present for %s (missing: %s). "
+        "Falling back to full operator dataset import.",
+        operator,
+        ", ".join(missing) if missing else "none",
+    )
+    return results
+
+
 def run_ingestion():
     """Main execution logic — fetches all operators from the Discovery API."""
     try:
@@ -543,7 +588,9 @@ def run_ingestion():
             log.info("Found %d dataset records for %s.",
                      len(results), operator)
 
-            for item in results:
+            selected_results = _select_discovery_results(operator, results)
+
+            for item in selected_results:
                 # Get the download URL and extension from the JSON
                 zip_url = item.get('url')
                 ext = item.get('extension')
