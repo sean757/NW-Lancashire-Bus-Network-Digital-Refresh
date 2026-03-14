@@ -639,6 +639,8 @@ function initializeLeafletMap() {
             busStopUpdateTimer = null;
             updateBusStopMarkers();
         }, 300);
+        // Apply the same zoom threshold to live bus markers
+        updateLiveBusMarkers();
     });
     updateZoomHint();
 
@@ -816,6 +818,14 @@ async function updateBusStopMarkers() {
  */
 async function updateLiveBusMarkers() {
     if (!map) return;
+
+    // Only show live bus icons at the same zoom level as bus stop icons
+    if (map.getZoom() < BUS_STOP_ZOOM_THRESHOLD) {
+        if (liveBusLayerGroup) {
+            liveBusLayerGroup.clearLayers();
+        }
+        return;
+    }
 
     let data;
     try {
