@@ -545,17 +545,10 @@ toInput.addEventListener('input', () => {
 // Initialize map and click handlers
 document.addEventListener('DOMContentLoaded', () => {
     loadAccessibilitySettings();
-    loadUiSettings();
-    initializeLeafletMap();
-    initializePlannerToggle();
-});
-
-// Initialize map and click handlers
-document.addEventListener('DOMContentLoaded', () => {
-    loadAccessibilitySettings();
     loadLanguageSettings();
     loadUiSettings();
     initializeLeafletMap();
+    initializePlannerToggle();
 
     // Set datetime-local input constraint: max = now + 7 days
     const dtInput = document.getElementById('departureTime');
@@ -689,8 +682,15 @@ function initializeLeafletMap() {
         updateMapClickHint();
     });
 
-    // Start live bus tracking with 30-second auto-refresh
-    startLiveBusRefresh();
+    // Start live bus tracking with 30-second auto-refresh if enabled
+    if (uiSettings.showLiveBuses) {
+        startLiveBusRefresh();
+    }
+
+    // Ensure Leaflet tiles are sized after layout settles
+    setTimeout(() => {
+        if (map) map.invalidateSize();
+    }, 0);
 }
 
 /**
@@ -699,6 +699,13 @@ function initializeLeafletMap() {
  */
 async function updateBusStopMarkers() {
     if (!map) return;
+
+    if (!uiSettings.showBusStops) {
+        if (busStopLayerGroup) {
+            busStopLayerGroup.clearLayers();
+        }
+        return;
+    }
 
     // Below threshold – remove any existing stop markers and bail out
     if (map.getZoom() < BUS_STOP_ZOOM_THRESHOLD) {
@@ -794,8 +801,19 @@ async function updateBusStopMarkers() {
             updateMapClickHint();
         });
 
+        const viewDeparturesBtn = document.createElement('button');
+        viewDeparturesBtn.className = 'bus-stop-popup-btn';
+        viewDeparturesBtn.setAttribute('aria-label', `View departures for ${label}`);
+        const t = translations[currentLang] || translations.en;
+        viewDeparturesBtn.textContent = `🕒 ${t.viewDepartures || 'View Departures'}`;
+        viewDeparturesBtn.addEventListener('click', async () => {
+            marker.closePopup();
+            await openDeparturesOverlay(stop);
+        });
+
         btnGroup.appendChild(setStartBtn);
         btnGroup.appendChild(setEndBtn);
+        btnGroup.appendChild(viewDeparturesBtn);
         popupEl.appendChild(btnGroup);
 
         marker.bindPopup(popupEl, { maxWidth: 220 });
@@ -818,6 +836,13 @@ async function updateBusStopMarkers() {
  */
 async function updateLiveBusMarkers() {
     if (!map) return;
+
+    if (!uiSettings.showLiveBuses) {
+        if (liveBusLayerGroup) {
+            liveBusLayerGroup.clearLayers();
+        }
+        return;
+    }
 
     // Only show live bus icons at the same zoom level as bus stop icons
     if (map.getZoom() < BUS_STOP_ZOOM_THRESHOLD) {
@@ -963,6 +988,22 @@ function startLiveBusRefresh() {
     liveBusRefreshInterval = setInterval(tick, 1000);
 }
 
+function stopLiveBusRefresh() {
+    if (liveBusRefreshInterval) {
+        clearInterval(liveBusRefreshInterval);
+        liveBusRefreshInterval = null;
+    }
+
+    if (liveBusRefreshTimerControl) {
+        liveBusRefreshTimerControl.remove();
+        liveBusRefreshTimerControl = null;
+    }
+
+    if (liveBusLayerGroup) {
+        liveBusLayerGroup.clearLayers();
+    }
+}
+
 
 /** Build the SVG countdown ring HTML for the refresh timer control. */
 function _buildTimerHTML(secondsLeft, total) {
@@ -995,6 +1036,9 @@ function initializePlannerToggle() {
     plannerToggle.addEventListener('click', () => {
         const isCollapsed = routePlanner.classList.toggle('collapsed');
         plannerToggle.setAttribute('aria-expanded', !isCollapsed);
+        setTimeout(() => {
+            if (map) map.invalidateSize();
+        }, 320);
     });
 }
 
@@ -1015,29 +1059,6 @@ closeSidebar.addEventListener('click', () => {
 document.addEventListener('click', (e) => {
     if (!sidebar.contains(e.target) && !menuBtn.contains(e.target)) {
         sidebar.classList.remove('active');
-    }
-});
-
-// Accessibility Modal
-const accessibilityLink = document.getElementById('accessibilityLink');
-const accessibilityModal = document.getElementById('accessibilityModal');
-const closeModal = document.getElementById('closeModal');
-const saveSettings = document.getElementById('saveSettings');
-
-accessibilityLink.addEventListener('click', (e) => {
-    e.preventDefault();
-    accessibilityModal.classList.add('active');
-    sidebar.classList.remove('active');
-});
-
-closeModal.addEventListener('click', () => {
-    accessibilityModal.classList.remove('active');
-});
-
-// Close modal when clicking outside
-accessibilityModal.addEventListener('click', (e) => {
-    if (e.target === accessibilityModal) {
-        accessibilityModal.classList.remove('active');
     }
 });
 
@@ -1097,12 +1118,18 @@ const saveUiSettingsBtn = document.getElementById('saveUiSettings');
 const settingsShowWeatherInput = document.getElementById('settingsShowWeather');
 const settingsShowMapHintsInput = document.getElementById('settingsShowMapHints');
 const settingsDarkMapInput = document.getElementById('settingsDarkMap');
+const settingsShowLiveBusesInput = document.getElementById('settingsShowLiveBuses');
+const settingsShowBusStopsInput = document.getElementById('settingsShowBusStops');
 const settingsDisableNotificationsInput = document.getElementById('settingsDisableNotifications');
+const fontSizeInput = document.getElementById('fontSize');
+const highContrastInput = document.getElementById('highContrast');
 
 const defaultUiSettings = {
     showWeather: true,
     showMapHints: true,
     darkMap: false,
+    showLiveBuses: true,
+    showBusStops: true,
     disableNotifications: false,
 };
 
@@ -1116,6 +1143,16 @@ function applyUiSettings() {
 
     document.body.classList.toggle('hide-map-hints', !uiSettings.showMapHints);
     document.body.classList.toggle('map-night-mode', !!uiSettings.darkMap);
+
+    if (map) {
+        if (uiSettings.showLiveBuses) {
+            startLiveBusRefresh();
+        } else {
+            stopLiveBusRefresh();
+        }
+        updateBusStopMarkers();
+    }
+
     updateMapClickHint();
 }
 
@@ -1138,6 +1175,8 @@ function loadUiSettings() {
     if (settingsShowWeatherInput) settingsShowWeatherInput.checked = !!uiSettings.showWeather;
     if (settingsShowMapHintsInput) settingsShowMapHintsInput.checked = !!uiSettings.showMapHints;
     if (settingsDarkMapInput) settingsDarkMapInput.checked = !!uiSettings.darkMap;
+    if (settingsShowLiveBusesInput) settingsShowLiveBusesInput.checked = !!uiSettings.showLiveBuses;
+    if (settingsShowBusStopsInput) settingsShowBusStopsInput.checked = !!uiSettings.showBusStops;
     if (settingsDisableNotificationsInput) settingsDisableNotificationsInput.checked = !!uiSettings.disableNotifications;
     applyUiSettings();
 }
@@ -1163,15 +1202,21 @@ const translations = {
         enterPoints: 'Enter your start and end points to plan your journey.',
         menuTitle: 'Menu',
         home: 'Home',
-        accessibility: 'Accessibility Settings',
         languages: 'Languages',
         settings: 'Settings',
         reportBug: 'Report Bug',
         settingsTitle: 'Settings',
+        settingsSectionMap: 'Map Settings',
+        settingsSectionNotifications: 'Notification Settings',
+        settingsSectionAccessibility: 'Accessibility Settings',
         settingsShowWeather: 'Show weather icon',
         settingsShowMapHints: 'Show map helper pop-ups',
         settingsDarkMap: 'Dark mode map tint',
+        settingsShowLiveBuses: 'Show live bus locations',
+        settingsShowBusStops: 'Show bus stops',
         settingsDisableNotifications: 'Disable notification messages',
+        fontSize: 'Font Size:',
+        highContrast: 'High Contrast Mode:',
         settingsSave: 'Save Settings',
         settingsSaved: 'Settings updated successfully!',
         departs: 'DEPARTS',
@@ -1193,7 +1238,13 @@ const translations = {
         clickHintReset: '🖱️ Double-click the map to change your start point',
         mapClickNotifyStart: 'Start point set. Now double-click your destination on the map.',
         mapClickNotifyEnd: "End point set. Click 'Plan Route' to continue.",
-        mapClickNotifyReset: 'Start point updated. Now double-click your destination on the map.'
+        mapClickNotifyReset: 'Start point updated. Now double-click your destination on the map.',
+        viewDepartures: 'View Departures',
+        departuresTitle: 'Departures (next 24 hours)',
+        departuresLoading: 'Loading departures…',
+        departuresNone: 'No scheduled departures found in the next 24 hours.',
+        departuresError: 'Could not load departures for this stop.',
+        departuresToPrefix: 'To'
     },
     zh: {
         header: '兰开夏郡旅程规划',
@@ -1214,15 +1265,21 @@ const translations = {
         enterPoints: '输入起点和终点以规划您的旅程。',
         menuTitle: '菜单',
         home: '主页',
-        accessibility: '无障碍设置',
         languages: '语言',
         settings: '设置',
         reportBug: '报告错误',
         settingsTitle: '设置',
+        settingsSectionMap: '地图设置',
+        settingsSectionNotifications: '通知设置',
+        settingsSectionAccessibility: '无障碍设置',
         settingsShowWeather: '显示天气图标',
         settingsShowMapHints: '显示地图提示弹窗',
         settingsDarkMap: '地图夜间深色',
+        settingsShowLiveBuses: '显示实时公交位置',
+        settingsShowBusStops: '显示公交站点',
         settingsDisableNotifications: '禁用通知消息',
+        fontSize: '字体大小：',
+        highContrast: '高对比度模式：',
         settingsSave: '保存设置',
         settingsSaved: '设置更新成功！',
         departs: '出发',
@@ -1244,7 +1301,13 @@ const translations = {
         clickHintReset: '🖱️ 双击地图更改起点',
         mapClickNotifyStart: '起点已设置。请在地图上双击目的地。',
         mapClickNotifyEnd: '终点已设置。点击"规划路线"继续。',
-        mapClickNotifyReset: '起点已更新。请在地图上双击目的地。'
+        mapClickNotifyReset: '起点已更新。请在地图上双击目的地。',
+        viewDepartures: '查看发车',
+        departuresTitle: '发车信息（未来24小时）',
+        departuresLoading: '正在加载发车信息…',
+        departuresNone: '未来24小时内没有计划发车。',
+        departuresError: '无法加载该站点的发车信息。',
+        departuresToPrefix: '开往'
     }
 };
 
@@ -1285,7 +1348,6 @@ function applyTranslations(lang) {
     // Sidebar
     document.querySelector('.sidebar-header h2').textContent = t.menuTitle;
     document.querySelector('.sidebar-menu li:nth-child(1) a').textContent = t.home;
-    document.querySelector('#accessibilityLink').textContent = t.accessibility;
     document.querySelector('#languageLink').textContent = t.languages;
     document.querySelector('#settingsLink').textContent = t.settings;
     document.querySelector('#reportBugLink').textContent = t.reportBug;
@@ -1293,14 +1355,28 @@ function applyTranslations(lang) {
     // Settings modal
     const settingsTitle = document.querySelector('#settingsModal .modal-header h2');
     if (settingsTitle) settingsTitle.textContent = t.settingsTitle;
+    const sectionMap = document.getElementById('settingsSectionMap');
+    if (sectionMap) sectionMap.textContent = t.settingsSectionMap;
+    const sectionNotifications = document.getElementById('settingsSectionNotifications');
+    if (sectionNotifications) sectionNotifications.textContent = t.settingsSectionNotifications;
+    const sectionAccessibility = document.getElementById('settingsSectionAccessibility');
+    if (sectionAccessibility) sectionAccessibility.textContent = t.settingsSectionAccessibility;
     const weatherLabel = document.querySelector('label[for="settingsShowWeather"]');
     if (weatherLabel) weatherLabel.textContent = t.settingsShowWeather;
     const hintsLabel = document.querySelector('label[for="settingsShowMapHints"]');
     if (hintsLabel) hintsLabel.textContent = t.settingsShowMapHints;
     const darkMapLabel = document.querySelector('label[for="settingsDarkMap"]');
     if (darkMapLabel) darkMapLabel.textContent = t.settingsDarkMap;
+    const showLiveBusesLabel = document.querySelector('label[for="settingsShowLiveBuses"]');
+    if (showLiveBusesLabel) showLiveBusesLabel.textContent = t.settingsShowLiveBuses;
+    const showBusStopsLabel = document.querySelector('label[for="settingsShowBusStops"]');
+    if (showBusStopsLabel) showBusStopsLabel.textContent = t.settingsShowBusStops;
     const disableNotificationsLabel = document.querySelector('label[for="settingsDisableNotifications"]');
     if (disableNotificationsLabel) disableNotificationsLabel.textContent = t.settingsDisableNotifications;
+    const fontSizeLabel = document.querySelector('label[for="fontSize"]');
+    if (fontSizeLabel) fontSizeLabel.textContent = t.fontSize;
+    const highContrastLabel = document.querySelector('label[for="highContrast"]');
+    if (highContrastLabel) highContrastLabel.textContent = t.highContrast;
     const settingsSaveBtn = document.getElementById('saveUiSettings');
     if (settingsSaveBtn) settingsSaveBtn.textContent = t.settingsSave;
 
@@ -1337,6 +1413,8 @@ settingsLink.addEventListener('click', (e) => {
     settingsShowWeatherInput.checked = !!uiSettings.showWeather;
     settingsShowMapHintsInput.checked = !!uiSettings.showMapHints;
     if (settingsDarkMapInput) settingsDarkMapInput.checked = !!uiSettings.darkMap;
+    if (settingsShowLiveBusesInput) settingsShowLiveBusesInput.checked = !!uiSettings.showLiveBuses;
+    if (settingsShowBusStopsInput) settingsShowBusStopsInput.checked = !!uiSettings.showBusStops;
     if (settingsDisableNotificationsInput) settingsDisableNotificationsInput.checked = !!uiSettings.disableNotifications;
     settingsModal.classList.add('active');
     sidebar.classList.remove('active');
@@ -1356,8 +1434,11 @@ saveUiSettingsBtn.addEventListener('click', () => {
     uiSettings.showWeather = !!settingsShowWeatherInput.checked;
     uiSettings.showMapHints = !!settingsShowMapHintsInput.checked;
     uiSettings.darkMap = !!(settingsDarkMapInput && settingsDarkMapInput.checked);
+    uiSettings.showLiveBuses = !!(settingsShowLiveBusesInput && settingsShowLiveBusesInput.checked);
+    uiSettings.showBusStops = !!(settingsShowBusStopsInput && settingsShowBusStopsInput.checked);
     uiSettings.disableNotifications = !!(settingsDisableNotificationsInput && settingsDisableNotificationsInput.checked);
     localStorage.setItem('ui_settings', JSON.stringify(uiSettings));
+    saveAccessibilitySettings();
     applyUiSettings();
     settingsModal.classList.remove('active');
     const t = translations[currentLang] || translations.en;
@@ -1374,9 +1455,9 @@ function loadLanguageSettings() {
 }
 
 // Save accessibility settings
-saveSettings.addEventListener('click', () => {
-    const fontSize = document.getElementById('fontSize').value;
-    const highContrast = document.getElementById('highContrast').checked;
+function saveAccessibilitySettings() {
+    const fontSize = fontSizeInput ? fontSizeInput.value : 'medium';
+    const highContrast = highContrastInput ? highContrastInput.checked : false;
     // Apply font size - remove only the specific font size classes
     document.body.classList.remove('font-small', 'font-medium', 'font-large', 'font-extra-large');
     document.body.classList.add(`font-${fontSize}`);
@@ -1393,25 +1474,27 @@ saveSettings.addEventListener('click', () => {
         fontSize,
         highContrast,
     }));
-
-    accessibilityModal.classList.remove('active');
-
-    // Show accessible notification
-    showNotification('Accessibility settings saved successfully!');
-});
+}
 
 // Load saved accessibility settings
 function loadAccessibilitySettings() {
     const saved = localStorage.getItem('accessibility');
+    document.body.classList.remove('font-small', 'font-medium', 'font-large', 'font-extra-large');
+    document.body.classList.remove('high-contrast');
     if (saved) {
-        const settings = JSON.parse(saved);
+        let settings = {};
+        try {
+            settings = JSON.parse(saved || '{}');
+        } catch (err) {
+            settings = {};
+        }
 
-        document.getElementById('fontSize').value = settings.fontSize;
-        document.getElementById('highContrast').checked = settings.highContrast;
+        if (fontSizeInput && settings.fontSize) fontSizeInput.value = settings.fontSize;
+        if (highContrastInput) highContrastInput.checked = !!settings.highContrast;
 
 
         // Apply settings
-        document.body.classList.add(`font-${settings.fontSize}`);
+        document.body.classList.add(`font-${settings.fontSize || 'medium'}`);
         if (settings.highContrast) {
             document.body.classList.add('high-contrast');
         }
@@ -1428,180 +1511,132 @@ const routeDisplay = document.getElementById('routeDisplay');
 // Layer group to hold drawn routes so we can clear them
 let routeLayerGroup = null;
 
-function initializeRouteDisplayInteractions() {
-    if (!routeDisplay) return;
-    const dragHandle = routeDisplay.querySelector('h3');
-    if (!dragHandle) return;
+let departuresOverlay = null;
+let departuresOverlayTitle = null;
+let departuresOverlayBody = null;
 
-    let resizer = routeDisplay.querySelector('.route-display-resizer');
-    if (!resizer) {
-        resizer = document.createElement('div');
-        resizer.className = 'route-display-resizer';
-        resizer.setAttribute('aria-hidden', 'true');
-        routeDisplay.appendChild(resizer);
-    }
+function ensureDeparturesOverlay() {
+    if (departuresOverlay) return departuresOverlay;
+    if (!routeDisplay) return null;
 
-    let isDragging = false;
-    let isResizing = false;
-    let activePointerId = null;
-    let dragOffsetX = 0;
-    let dragOffsetY = 0;
+    departuresOverlay = document.createElement('section');
+    departuresOverlay.className = 'route-display-overlay';
+    departuresOverlay.setAttribute('aria-live', 'polite');
 
-    let resizeStartX = 0;
-    let resizeStartY = 0;
-    let resizeStartWidth = 0;
-    let resizeStartHeight = 0;
+    const header = document.createElement('div');
+    header.className = 'route-display-overlay-header';
 
-    const getPanelMinWidth = () => parseFloat(getComputedStyle(routeDisplay).minWidth) || 260;
-    const getPanelMinHeight = () => parseFloat(getComputedStyle(routeDisplay).minHeight) || 160;
+    departuresOverlayTitle = document.createElement('div');
+    departuresOverlayTitle.className = 'route-display-overlay-title';
 
-    const normalizePositionAnchor = () => {
-        const container = routeDisplay.parentElement;
-        if (!container) return;
-        const containerRect = container.getBoundingClientRect();
-        const panelRect = routeDisplay.getBoundingClientRect();
-        routeDisplay.style.left = (panelRect.left - containerRect.left) + 'px';
-        routeDisplay.style.top = (panelRect.top - containerRect.top) + 'px';
-        routeDisplay.style.right = 'auto';
-    };
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'route-display-overlay-close';
+    closeBtn.setAttribute('type', 'button');
+    closeBtn.setAttribute('aria-label', 'Close departures panel');
+    closeBtn.innerHTML = '&times;';
+    closeBtn.addEventListener('click', closeDeparturesOverlay);
 
-    const clampToContainer = () => {
-        const container = routeDisplay.parentElement;
-        if (!container) return;
+    header.appendChild(departuresOverlayTitle);
+    header.appendChild(closeBtn);
 
-        const containerRect = container.getBoundingClientRect();
-        const panelRect = routeDisplay.getBoundingClientRect();
+    departuresOverlayBody = document.createElement('div');
+    departuresOverlayBody.className = 'route-display-overlay-body';
 
-        // If panel has not been moved yet (still right-anchored), skip clamping.
-        if (!routeDisplay.style.left && !routeDisplay.style.top) return;
+    departuresOverlay.appendChild(header);
+    departuresOverlay.appendChild(departuresOverlayBody);
+    routeDisplay.appendChild(departuresOverlay);
 
-        const maxAllowedWidth = Math.max(getPanelMinWidth(), containerRect.width);
-        const maxAllowedHeight = Math.max(getPanelMinHeight(), containerRect.height);
-
-        const currentWidth = panelRect.width;
-        const currentHeight = panelRect.height;
-
-        if (currentWidth > maxAllowedWidth) {
-            routeDisplay.style.width = maxAllowedWidth + 'px';
-        }
-        if (currentHeight > maxAllowedHeight) {
-            routeDisplay.style.height = maxAllowedHeight + 'px';
-        }
-
-        const updatedRect = routeDisplay.getBoundingClientRect();
-        const maxLeft = Math.max(0, containerRect.width - updatedRect.width);
-        const maxTop = Math.max(0, containerRect.height - updatedRect.height);
-
-        const currentLeft = parseFloat(routeDisplay.style.left || '0');
-        const currentTop = parseFloat(routeDisplay.style.top || '0');
-
-        routeDisplay.style.left = Math.min(Math.max(0, currentLeft), maxLeft) + 'px';
-        routeDisplay.style.top = Math.min(Math.max(0, currentTop), maxTop) + 'px';
-    };
-
-    const onPointerMove = (e) => {
-        if (activePointerId !== null && e.pointerId !== activePointerId) return;
-        const container = routeDisplay.parentElement;
-        if (!container) return;
-
-        const containerRect = container.getBoundingClientRect();
-
-        if (isDragging) {
-            const panelRect = routeDisplay.getBoundingClientRect();
-
-            let left = e.clientX - containerRect.left - dragOffsetX;
-            let top = e.clientY - containerRect.top - dragOffsetY;
-
-            const maxLeft = Math.max(0, containerRect.width - panelRect.width);
-            const maxTop = Math.max(0, containerRect.height - panelRect.height);
-
-            left = Math.min(Math.max(0, left), maxLeft);
-            top = Math.min(Math.max(0, top), maxTop);
-
-            routeDisplay.style.left = left + 'px';
-            routeDisplay.style.top = top + 'px';
-            routeDisplay.style.right = 'auto';
-        }
-
-        if (isResizing) {
-            const leftPx = parseFloat(routeDisplay.style.left || '0');
-            const topPx = parseFloat(routeDisplay.style.top || '0');
-
-            const maxWidth = Math.max(getPanelMinWidth(), containerRect.width - leftPx);
-            const maxHeight = Math.max(getPanelMinHeight(), containerRect.height - topPx);
-
-            let nextWidth = resizeStartWidth + (e.clientX - resizeStartX);
-            let nextHeight = resizeStartHeight + (e.clientY - resizeStartY);
-
-            nextWidth = Math.min(Math.max(getPanelMinWidth(), nextWidth), maxWidth);
-            nextHeight = Math.min(Math.max(getPanelMinHeight(), nextHeight), maxHeight);
-
-            routeDisplay.style.width = nextWidth + 'px';
-            routeDisplay.style.height = nextHeight + 'px';
-        }
-    };
-
-    const onPointerUp = (e) => {
-        if (activePointerId !== null && e.pointerId !== activePointerId) return;
-        if (!isDragging && !isResizing) return;
-        isDragging = false;
-        isResizing = false;
-        activePointerId = null;
-        document.body.classList.remove('route-panel-dragging');
-        document.body.classList.remove('route-panel-resizing');
-        window.removeEventListener('pointermove', onPointerMove);
-        window.removeEventListener('pointerup', onPointerUp);
-        window.removeEventListener('pointercancel', onPointerUp);
-    };
-
-    dragHandle.addEventListener('pointerdown', (e) => {
-        // Primary pointer only
-        if (!e.isPrimary) return;
-        if (e.target === resizer) return;
-        normalizePositionAnchor();
-        clampToContainer();
-
-        isDragging = true;
-        activePointerId = e.pointerId;
-
-        const panelRect = routeDisplay.getBoundingClientRect();
-        dragOffsetX = e.clientX - panelRect.left;
-        dragOffsetY = e.clientY - panelRect.top;
-
-        document.body.classList.add('route-panel-dragging');
-        window.addEventListener('pointermove', onPointerMove);
-        window.addEventListener('pointerup', onPointerUp);
-        window.addEventListener('pointercancel', onPointerUp);
-        e.preventDefault();
-    });
-
-    resizer.addEventListener('pointerdown', (e) => {
-        if (!e.isPrimary) return;
-        normalizePositionAnchor();
-        clampToContainer();
-
-        isResizing = true;
-        activePointerId = e.pointerId;
-
-        const panelRect = routeDisplay.getBoundingClientRect();
-        resizeStartX = e.clientX;
-        resizeStartY = e.clientY;
-        resizeStartWidth = panelRect.width;
-        resizeStartHeight = panelRect.height;
-
-        document.body.classList.add('route-panel-resizing');
-        window.addEventListener('pointermove', onPointerMove);
-        window.addEventListener('pointerup', onPointerUp);
-        window.addEventListener('pointercancel', onPointerUp);
-        e.preventDefault();
-        e.stopPropagation();
-    });
-
-    // Keep panel visible if viewport/container changes while resized.
-    window.addEventListener('resize', clampToContainer);
+    return departuresOverlay;
 }
 
-initializeRouteDisplayInteractions();
+function closeDeparturesOverlay() {
+    if (!departuresOverlay) return;
+    departuresOverlay.classList.remove('active');
+    if (routeDisplay) {
+        routeDisplay.classList.remove('showing-departures');
+    }
+}
+
+function formatDepartureDateTime(value) {
+    if (!value) return '';
+    const d = new Date(value);
+    if (Number.isNaN(d.getTime())) return value;
+    return d.toLocaleString([], {
+        weekday: 'short',
+        hour: '2-digit',
+        minute: '2-digit',
+        day: '2-digit',
+        month: 'short',
+    });
+}
+
+async function openDeparturesOverlay(stop) {
+    const overlay = ensureDeparturesOverlay();
+    if (!overlay || !departuresOverlayBody || !departuresOverlayTitle) return;
+
+    const t = translations[currentLang] || translations.en;
+    const stopName = (stop && (stop.stop_name || stop.name || stop.label)) || 'Stop';
+    const stopId = stop && stop.stop_id;
+
+    departuresOverlayTitle.textContent = `${t.departuresTitle || 'Departures (next 24 hours)'} · ${stopName}`;
+    departuresOverlayBody.innerHTML = `<p>${t.departuresLoading || 'Loading departures…'}</p>`;
+    overlay.classList.add('active');
+    if (routeDisplay) {
+        routeDisplay.classList.add('showing-departures');
+    }
+
+    if (!stopId) {
+        departuresOverlayBody.innerHTML = `<p>${t.departuresError || 'Could not load departures for this stop.'}</p>`;
+        return;
+    }
+
+    try {
+        const res = await fetch(`${apiUrl}/stops/${encodeURIComponent(stopId)}/departures`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        const departures = Array.isArray(data.departures) ? data.departures : [];
+
+        if (!departures.length) {
+            departuresOverlayBody.innerHTML = `<p>${t.departuresNone || 'No scheduled departures found in the next 24 hours.'}</p>`;
+            return;
+        }
+
+        const list = document.createElement('ul');
+        list.className = 'departures-list';
+
+        departures.forEach((dep) => {
+            const item = document.createElement('li');
+            item.className = 'departures-item';
+
+            const route = document.createElement('div');
+            route.className = 'departures-item-route';
+            route.textContent = `${dep.route_name || dep.route_id || 'Route'} · ${dep.departure_time || ''}`;
+
+            const meta = document.createElement('div');
+            meta.className = 'departures-item-meta';
+            const when = formatDepartureDateTime(dep.departure_datetime);
+            const operator = dep.operator ? ` · ${dep.operator}` : '';
+            const destinationText = dep.final_destination_name
+                ? ` · ${(t.departuresToPrefix || 'To')} ${dep.final_destination_name}`
+                : '';
+            meta.textContent = `${when}${destinationText}${operator}`;
+
+            item.appendChild(route);
+            item.appendChild(meta);
+            list.appendChild(item);
+        });
+
+        departuresOverlayBody.innerHTML = '';
+        departuresOverlayBody.appendChild(list);
+    } catch (err) {
+        console.error('Failed to load departures:', err);
+        departuresOverlayBody.innerHTML = `<p>${t.departuresError || 'Could not load departures for this stop.'}</p>`;
+    }
+}
+
+window.addEventListener('resize', () => {
+    if (map) map.invalidateSize();
+});
 
 async function fetchStop(stop_id) {
     try {

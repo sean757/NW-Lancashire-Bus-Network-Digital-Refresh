@@ -89,6 +89,23 @@ def parse_duration(duration_str):
     return hours * 3600 + minutes * 60 + seconds
 
 
+def _activity_flags(activity_value):
+    """Return (pickup_allowed, setdown_allowed) for a TXC Activity value."""
+    if not activity_value:
+        return True, True
+
+    key = str(activity_value).strip().lower()
+    if key == 'pickupandsetdown':
+        return True, True
+    if key == 'pickup':
+        return True, False
+    if key == 'setdown':
+        return False, True
+
+    # e.g. pass
+    return False, False
+
+
 def days_to_bitmask(days_elem):
     """Convert DaysOfWeek element to bitmask. Mon=1, Tue=2, Wed=4, Thu=8, Fri=16, Sat=32, Sun=64."""
     if days_elem is None:
@@ -216,7 +233,41 @@ def _ensure_route_waypoint_variant_schema(conn):
         )
 
 
-def parse_txc_xml(conn, xml_content, operator_code, valid_stops, stop_coords):
+def _ensure_timetables_call_activity_schema(conn):
+    """Ensure timetables has explicit pickup/setdown flags per stop call."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "ALTER TABLE timetables "
+            "ADD COLUMN IF NOT EXISTS pickup_allowed BOOLEAN"
+        )
+        cur.execute(
+            "ALTER TABLE timetables "
+            "ADD COLUMN IF NOT EXISTS setdown_allowed BOOLEAN"
+        )
+        cur.execute(
+            "UPDATE timetables "
+            "SET pickup_allowed = COALESCE(pickup_allowed, TRUE), "
+            "    setdown_allowed = COALESCE(setdown_allowed, TRUE)"
+        )
+        cur.execute(
+            "ALTER TABLE timetables "
+            "ALTER COLUMN pickup_allowed SET DEFAULT TRUE"
+        )
+        cur.execute(
+            "ALTER TABLE timetables "
+            "ALTER COLUMN setdown_allowed SET DEFAULT TRUE"
+        )
+        cur.execute(
+            "ALTER TABLE timetables "
+            "ALTER COLUMN pickup_allowed SET NOT NULL"
+        )
+        cur.execute(
+            "ALTER TABLE timetables "
+            "ALTER COLUMN setdown_allowed SET NOT NULL"
+        )
+
+
+def parse_txc_xml(conn, xml_content, operator_code, valid_stops, stop_coords, processed_route_ids=None):
     """Parse TransXChange XML and insert into routes, route_stops, timetables, and route_waypoints.
 
     Args:
@@ -252,16 +303,34 @@ def parse_txc_xml(conn, xml_content, operator_code, valid_stops, stop_coords):
         )
         operator_code = xml_noc
 
-    # 1. Parse JourneyPatternSections — maps section_id -> list of (stop_ref, sequence, run_time_secs)
+    # 1. Parse JourneyPatternSections.
+    #    - sections maps section_id -> list of (stop_ref, sequence, run_time_secs)
+    #      (kept for route_stops fallback compatibility)
+    #    - section_timing_links maps section_id -> ordered list of timing links,
+    #      each carrying from/to stop, runtime and from-stop wait time.
     sections = {}
+    section_timing_links = {}
     for section in root.findall('.//txc:JourneyPatternSection', namespaces=NS):
         section_id = section.get('id')
         stops = []
+        timing_links = []
         for link in section.findall('txc:JourneyPatternTimingLink', namespaces=NS):
+            jptl_id = (link.get('id') or '').strip()
             from_elem = link.find('txc:From', namespaces=NS)
             to_elem = link.find('txc:To', namespaces=NS)
             run_time = parse_duration(
                 link.findtext('txc:RunTime', namespaces=NS))
+
+            from_activity = (from_elem.findtext('txc:Activity', namespaces=NS)
+                             if from_elem is not None else None)
+            to_activity = (to_elem.findtext('txc:Activity', namespaces=NS)
+                           if to_elem is not None else None)
+
+            from_wait_time = 0
+            if from_elem is not None:
+                from_wait_time = parse_duration(
+                    from_elem.findtext('txc:WaitTime', namespaces=NS)
+                )
 
             if from_elem is not None and not stops:
                 seq = int(from_elem.get('SequenceNumber', 0))
@@ -277,7 +346,32 @@ def parse_txc_xml(conn, xml_content, operator_code, valid_stops, stop_coords):
                 if stop_ref:
                     stops.append((stop_ref, seq, run_time))
 
+            from_ref = _sanitize_stop_ref(
+                from_elem.findtext('txc:StopPointRef', namespaces=NS)
+            ) if from_elem is not None else None
+            to_ref = _sanitize_stop_ref(
+                to_elem.findtext('txc:StopPointRef', namespaces=NS)
+            ) if to_elem is not None else None
+            from_seq = int(from_elem.get('SequenceNumber', 0)
+                           ) if from_elem is not None else 0
+            to_seq = int(to_elem.get('SequenceNumber', 0)
+                         ) if to_elem is not None else 0
+
+            if from_ref and to_ref:
+                timing_links.append({
+                    'jptl_id': jptl_id,
+                    'from_stop': from_ref,
+                    'from_seq': from_seq,
+                    'to_stop': to_ref,
+                    'to_seq': to_seq,
+                    'run_time': run_time,
+                    'from_wait_time': from_wait_time,
+                    'from_activity': from_activity,
+                    'to_activity': to_activity,
+                })
+
         sections[section_id] = stops
+        section_timing_links[section_id] = timing_links
 
     # 2. Parse JourneyPatterns — maps pattern_id -> (list_of_section_ids, direction)
     # Also capture optional RouteRef per journey pattern (used for geometry)
@@ -364,12 +458,6 @@ def parse_txc_xml(conn, xml_content, operator_code, valid_stops, stop_coords):
     default_line_name = service_elem.findtext(
         './/txc:LineName', namespaces=NS) or service_code
 
-    # Default placeholder run time (seconds) used when a timing link
-    # carries no duration (PT0M0S / 0s).  1 minute per link gives each
-    # stop a distinct, incrementing time so that the journey planner can
-    # distinguish origin departure from destination arrival.
-    PLACEHOLDER_RUN_TIME_SECS = 60
-
     # Build per-line route metadata and timetable rows from vehicle journeys.
     route_names = {}
     route_pattern_refs = defaultdict(set)
@@ -391,13 +479,55 @@ def parse_txc_xml(conn, xml_content, operator_code, valid_stops, stop_coords):
         route_pattern_refs[route_id].add(jp_ref)
 
         section_ids, direction = patterns[jp_ref]
-        # Build the combined stop sequence from all referenced sections.
-        combined_stops = []
+
+        # VehicleJourney-level overrides (runtime/wait) for JourneyPattern links.
+        vj_link_overrides = {}
+        for vj_link in vj.findall('txc:VehicleJourneyTimingLink', namespaces=NS):
+            jptl_ref = (vj_link.findtext(
+                'txc:JourneyPatternTimingLinkRef', namespaces=NS) or '').strip()
+            if not jptl_ref:
+                continue
+            ov_run_time = parse_duration(
+                vj_link.findtext('txc:RunTime', namespaces=NS)
+            )
+            ov_wait_time = parse_duration(
+                vj_link.findtext('txc:From/txc:WaitTime', namespaces=NS)
+            )
+            ov_from_activity = vj_link.findtext(
+                'txc:From/txc:Activity', namespaces=NS)
+            ov_to_activity = vj_link.findtext(
+                'txc:To/txc:Activity', namespaces=NS)
+            vj_link_overrides[jptl_ref] = {
+                'run_time': ov_run_time,
+                'from_wait_time': ov_wait_time,
+                'from_activity': ov_from_activity,
+                'to_activity': ov_to_activity,
+            }
+
+        # Build combined timing links from all referenced journey pattern sections.
+        combined_links = []
         for section_id in (section_ids if isinstance(section_ids, (list, tuple)) else [section_ids]):
-            if section_id in sections:
-                combined_stops.extend(sections[section_id])
-        if not combined_stops:
+            if section_id in section_timing_links:
+                combined_links.extend(section_timing_links[section_id])
+        if not combined_links:
             continue
+
+        # Apply per-vehicle-journey timing overrides where present.
+        if vj_link_overrides:
+            merged_links = []
+            for link in combined_links:
+                override = vj_link_overrides.get(link['jptl_id'])
+                if override:
+                    merged_links.append({
+                        **link,
+                        'run_time': override.get('run_time', link['run_time']),
+                        'from_wait_time': override.get('from_wait_time', link['from_wait_time']),
+                        'from_activity': override.get('from_activity') or link.get('from_activity'),
+                        'to_activity': override.get('to_activity') or link.get('to_activity'),
+                    })
+                else:
+                    merged_links.append(link)
+            combined_links = merged_links
 
         days_elem = vj.find('.//txc:DaysOfWeek', namespaces=NS)
         days_bitmask = days_to_bitmask(days_elem)
@@ -409,35 +539,91 @@ def parse_txc_xml(conn, xml_content, operator_code, valid_stops, stop_coords):
             else f"{route_id}_{departure_str}_{direction}"
         )
 
-        # Calculate arrival/departure times by accumulating run times.
+        # Calculate arrival/departure times from link runtime + wait (loitering)
+        # values. WaitTime is applied at the FROM stop before traversing the link.
         dep_parts = departure_str.split(':')
         base_hour, base_min, base_sec = int(dep_parts[0]), int(
             dep_parts[1]), int(dep_parts[2]) if len(dep_parts) > 2 else 0
-        cumulative_secs = base_hour * 3600 + base_min * 60 + base_sec
+        base_secs = base_hour * 3600 + base_min * 60 + base_sec
 
-        for i, (stop_ref, seq, run_time) in enumerate(combined_stops):
-            effective_run_time = run_time if (
-                i == 0 or run_time > 0) else PLACEHOLDER_RUN_TIME_SECS
-            cumulative_secs += effective_run_time
-            arrival_secs = cumulative_secs
+        def _secs_to_hms(total_secs: int) -> str:
+            h = (total_secs // 3600) % 24
+            m = (total_secs % 3600) // 60
+            s = total_secs % 60
+            return f"{h:02d}:{m:02d}:{s:02d}"
 
+        first_link = combined_links[0]
+        first_pickup, first_setdown = _activity_flags(
+            first_link.get('from_activity'))
+        stop_records = [{
+            'stop_ref': first_link['from_stop'],
+            'seq': first_link['from_seq'],
+            'arrival_secs': base_secs,
+            'departure_secs': base_secs,
+            'pickup_allowed': first_pickup,
+            'setdown_allowed': first_setdown,
+        }]
+
+        for idx, link in enumerate(combined_links):
+            current = stop_records[-1]
+
+            # If section boundaries produce a mismatch, realign to the link FROM stop.
+            if current['stop_ref'] != link['from_stop']:
+                from_pickup, from_setdown = _activity_flags(
+                    link.get('from_activity'))
+                stop_records.append({
+                    'stop_ref': link['from_stop'],
+                    'seq': link['from_seq'],
+                    'arrival_secs': current['departure_secs'],
+                    'departure_secs': current['departure_secs'],
+                    'pickup_allowed': from_pickup,
+                    'setdown_allowed': from_setdown,
+                })
+                current = stop_records[-1]
+
+            # Apply dwell/loiter wait time at FROM stop (not on the first origin stop).
+            wait_secs = int(link.get('from_wait_time') or 0)
+            if idx > 0 and wait_secs > 0:
+                current['departure_secs'] = max(
+                    current['departure_secs'],
+                    current['arrival_secs'] + wait_secs
+                )
+
+            run_secs = int(link.get('run_time') or 0)
+            arrival_to_secs = current['departure_secs'] + run_secs
+
+            to_pickup, to_setdown = _activity_flags(link.get('to_activity'))
+
+            stop_records.append({
+                'stop_ref': link['to_stop'],
+                'seq': link['to_seq'],
+                'arrival_secs': arrival_to_secs,
+                'departure_secs': arrival_to_secs,
+                'pickup_allowed': to_pickup,
+                'setdown_allowed': to_setdown,
+            })
+
+        for rec in stop_records:
+            stop_ref = rec['stop_ref']
             if stop_ref not in valid_stops:
                 continue
 
-            arr_h = (arrival_secs // 3600) % 24
-            arr_m = (arrival_secs % 3600) // 60
-            arr_s = arrival_secs % 60
-            arrival_time = f"{arr_h:02d}:{arr_m:02d}:{arr_s:02d}"
+            arrival_time = _secs_to_hms(rec['arrival_secs'])
+            departure_time = _secs_to_hms(rec['departure_secs'])
 
             timetables_batch.append((
                 route_id, stop_ref, trip_id,
-                arrival_time, arrival_time,
-                seq, direction, days_bitmask, start_date, end_date,
+                arrival_time, departure_time,
+                rec['seq'], direction, days_bitmask, start_date, end_date,
+                rec['pickup_allowed'], rec['setdown_allowed'],
             ))
             journey_counts[route_id] += 1
 
     if not route_names:
         return
+
+    if processed_route_ids is None:
+        processed_route_ids = set()
 
     with conn.cursor() as cur:
         # 4. Insert/update one route row per line (e.g. 1 and 1A).
@@ -454,12 +640,27 @@ def parse_txc_xml(conn, xml_content, operator_code, valid_stops, stop_coords):
                 description = EXCLUDED.description
         """, routes_batch)
 
-        # Refresh route geometry for these routes so old single-variant/default
-        # rows do not coexist with the newly imported per-variant rows.
-        cur.execute(
-            "DELETE FROM route_waypoints WHERE route_id = ANY(%s)",
-            (list(route_names.keys()),),
-        )
+        # Clear existing rows only once per route during this ingestion run.
+        # This avoids wiping out routes when multiple XML files for the same
+        # service are processed sequentially (where each file may contain only
+        # a subset of journeys).
+        first_seen_route_ids = [
+            rid for rid in route_names.keys() if rid not in processed_route_ids
+        ]
+        if first_seen_route_ids:
+            cur.execute(
+                "DELETE FROM timetables WHERE route_id = ANY(%s)",
+                (first_seen_route_ids,),
+            )
+            cur.execute(
+                "DELETE FROM route_stops WHERE route_id = ANY(%s)",
+                (first_seen_route_ids,),
+            )
+            cur.execute(
+                "DELETE FROM route_waypoints WHERE route_id = ANY(%s)",
+                (first_seen_route_ids,),
+            )
+            processed_route_ids.update(first_seen_route_ids)
 
         # 5. Collect route_stops rows, then batch-insert.
         route_stops_seen = set()
@@ -545,7 +746,8 @@ def parse_txc_xml(conn, xml_content, operator_code, valid_stops, stop_coords):
             execute_values(cur, """
                 INSERT INTO timetables
                     (route_id, stop_id, trip_id, arrival_time, departure_time,
-                     stop_sequence, direction, days_of_week, valid_from, valid_until)
+                     stop_sequence, direction, days_of_week, valid_from, valid_until,
+                     pickup_allowed, setdown_allowed)
                 VALUES %s
                 ON CONFLICT DO NOTHING
             """, timetables_batch)
@@ -561,7 +763,7 @@ def parse_txc_xml(conn, xml_content, operator_code, valid_stops, stop_coords):
     conn.commit()
 
 
-def download_and_extract(conn, zip_url, fallback_operator, valid_stops, stop_coords):
+def download_and_extract(conn, zip_url, fallback_operator, valid_stops, stop_coords, processed_route_ids=None):
     """Download a ZIP or XML file and process any TransXChange XML content.
 
     The real operator code is extracted from each XML file's
@@ -580,12 +782,14 @@ def download_and_extract(conn, zip_url, fallback_operator, valid_stops, stop_coo
                 log.info("Found %d XML files in ZIP", len(xml_files))
                 for filename in xml_files:
                     parse_txc_xml(conn, z.read(filename),
-                                  fallback_operator, valid_stops, stop_coords)
+                                  fallback_operator, valid_stops, stop_coords,
+                                  processed_route_ids=processed_route_ids)
         except zipfile.BadZipFile:
             # Not a ZIP — treat the downloaded content as raw TransXChange XML.
             log.info("Response is not a ZIP; attempting to parse as raw XML.")
             parse_txc_xml(conn, content, fallback_operator,
-                          valid_stops, stop_coords)
+                          valid_stops, stop_coords,
+                          processed_route_ids=processed_route_ids)
     except Exception as e:
         log.error("Error processing %s: %s", zip_url, e)
 
@@ -633,6 +837,7 @@ def run_ingestion():
     try:
         conn = psycopg2.connect(**DB_CONFIG)
         _ensure_route_waypoint_variant_schema(conn)
+        _ensure_timetables_call_activity_schema(conn)
         # No table creation — schema managed by init_db.sql
 
         # Pre-load stop data once for all operators/files to avoid repeated DB queries.
@@ -656,6 +861,8 @@ def run_ingestion():
         # returns identical datasets for related operator codes (e.g. all
         # Stagecoach subsidiaries share the same 13 dataset entries).
         seen_urls: set = set()
+        # Track route_ids that have already been cleared in this run.
+        processed_route_ids: set = set()
 
         for operator in OPERATORS:
             discovery_url = f"https://transport.scc.lancs.ac.uk/bus/times/{operator}"
@@ -691,7 +898,8 @@ def run_ingestion():
                     # fallback only; parse_txc_xml extracts the real
                     # NationalOperatorCode from inside each XML file.
                     download_and_extract(
-                        conn, zip_url, operator, valid_stops, stop_coords)
+                        conn, zip_url, operator, valid_stops, stop_coords,
+                        processed_route_ids=processed_route_ids)
 
         conn.close()
         log.info("All timetable data processed successfully.")

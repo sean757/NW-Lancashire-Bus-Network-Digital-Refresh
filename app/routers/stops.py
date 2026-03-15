@@ -3,6 +3,7 @@ Stops router — endpoints for querying bus stops.
 """
 
 import re
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -234,6 +235,169 @@ async def get_stop(stop_id: str, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Stop not found")
 
     return dict(row)
+
+
+@router.get("/{stop_id}/departures")
+async def get_stop_departures_next_24h(stop_id: str, db: AsyncSession = Depends(get_db)):
+    """Get scheduled departures for a stop in the next 24 hours."""
+    stop_result = await db.execute(
+        text(
+            """
+            SELECT stop_id, stop_name, locality
+            FROM stops
+            WHERE stop_id = :stop_id
+              AND active = TRUE
+              AND latitude  BETWEEN :svc_min_lat AND :svc_max_lat
+              AND longitude BETWEEN :svc_min_lon AND :svc_max_lon
+            """
+        ),
+        {"stop_id": stop_id, **_service_bounds_params()},
+    )
+    stop_row = stop_result.mappings().first()
+    if not stop_row:
+        raise HTTPException(status_code=404, detail="Stop not found")
+
+    now_dt = datetime.now()
+    horizon_dt = now_dt + timedelta(hours=24)
+
+    query = text(
+        """
+        WITH service_days AS (
+            SELECT CAST(:today AS DATE) AS service_date
+            UNION ALL
+            SELECT CAST(:tomorrow AS DATE) AS service_date
+        ),
+        timetable_with_ts AS (
+            SELECT
+                t.route_id,
+                r.route_name,
+                r.operator,
+                t.trip_id,
+                t.direction,
+                last_stop.final_stop_name,
+                t.stop_sequence,
+                t.departure_time,
+                sd.service_date,
+                (sd.service_date + t.departure_time) AS departure_datetime
+            FROM timetables t
+            JOIN routes r
+              ON r.route_id = t.route_id
+             AND r.active = TRUE
+            JOIN service_days sd
+              ON 1 = 1
+                        LEFT JOIN LATERAL (
+                                SELECT s2.stop_name AS final_stop_name
+                                FROM timetables t2
+                                JOIN stops s2
+                                    ON s2.stop_id = t2.stop_id
+                                 AND s2.active = TRUE
+                                WHERE t2.trip_id = t.trip_id
+                                    AND t2.route_id = t.route_id
+                                    AND COALESCE(t2.direction, 'outbound') = COALESCE(t.direction, 'outbound')
+                                ORDER BY t2.stop_sequence DESC
+                                LIMIT 1
+                        ) AS last_stop
+                            ON TRUE
+            WHERE t.stop_id = :stop_id
+                            AND COALESCE(t.pickup_allowed, TRUE) = TRUE
+              AND (
+                    t.valid_from IS NULL
+                    OR sd.service_date >= t.valid_from
+                  )
+              AND (
+                    t.valid_until IS NULL
+                    OR sd.service_date <= t.valid_until
+                  )
+              AND (
+                    t.days_of_week
+                    & CASE EXTRACT(DOW FROM sd.service_date)::int
+                        WHEN 1 THEN 1
+                        WHEN 2 THEN 2
+                        WHEN 3 THEN 4
+                        WHEN 4 THEN 8
+                        WHEN 5 THEN 16
+                        WHEN 6 THEN 32
+                        ELSE 64
+                      END
+                  ) <> 0
+        )
+        , ranked_calls AS (
+            SELECT
+                route_id,
+                route_name,
+                operator,
+                trip_id,
+                direction,
+                final_stop_name,
+                stop_sequence,
+                departure_time,
+                service_date,
+                departure_datetime,
+                ROW_NUMBER() OVER (
+                    PARTITION BY route_id, trip_id, service_date
+                    ORDER BY departure_datetime DESC, stop_sequence DESC
+                ) AS call_rank
+            FROM timetable_with_ts
+        )
+        SELECT
+            route_id,
+            route_name,
+            operator,
+            trip_id,
+            direction,
+            final_stop_name,
+            stop_sequence,
+            departure_time,
+            service_date,
+            departure_datetime
+        FROM ranked_calls
+        WHERE call_rank = 1
+          AND departure_datetime >= :now_dt
+          AND departure_datetime < :horizon_dt
+        ORDER BY departure_datetime ASC, route_name ASC
+        """
+    )
+
+    result = await db.execute(
+        query,
+        {
+            "stop_id": stop_id,
+            "today": now_dt.date(),
+            "tomorrow": (now_dt.date() + timedelta(days=1)),
+            "now_dt": now_dt,
+            "horizon_dt": horizon_dt,
+        },
+    )
+    rows = result.mappings().all()
+
+    departures = []
+    for row in rows:
+        departures.append(
+            {
+                "route_id": row["route_id"],
+                "route_name": row["route_name"],
+                "operator": row["operator"],
+                "trip_id": row["trip_id"],
+                "direction": row["direction"],
+                "final_destination_name": row["final_stop_name"],
+                "stop_sequence": row["stop_sequence"],
+                "service_date": row["service_date"].isoformat() if row["service_date"] else None,
+                "departure_time": row["departure_time"].strftime("%H:%M") if row["departure_time"] else None,
+                "departure_datetime": row["departure_datetime"].isoformat() if row["departure_datetime"] else None,
+            }
+        )
+
+    return {
+        "stop": {
+            "stop_id": stop_row["stop_id"],
+            "stop_name": stop_row["stop_name"],
+            "locality": stop_row["locality"],
+        },
+        "window_hours": 24,
+        "generated_at": now_dt.isoformat(),
+        "departures_count": len(departures),
+        "departures": departures,
+    }
 
 
 @router.get("/{stop_id}/routes")
