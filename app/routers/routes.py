@@ -13,9 +13,12 @@ router = APIRouter()
 @router.get("/{route_id}/waypoints")
 async def get_route_waypoints(
     route_id: str,
-    direction: str = Query(default="outbound", description="Route direction (outbound/inbound)"),
-    from_stop: str | None = Query(default=None, description="Origin stop ID — only return waypoints from this stop onward"),
-    to_stop: str | None = Query(default=None, description="Destination stop ID — only return waypoints up to this stop"),
+    direction: str = Query(
+        default="outbound", description="Route direction (outbound/inbound)"),
+    from_stop: str | None = Query(
+        default=None, description="Origin stop ID — only return waypoints from this stop onward"),
+    to_stop: str | None = Query(
+        default=None, description="Destination stop ID — only return waypoints up to this stop"),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -38,23 +41,42 @@ async def get_route_waypoints(
         raise HTTPException(status_code=404, detail="Route not found")
 
     if from_stop and to_stop:
-        # Find the sequence numbers for the two stops, then return the slice.
+        # For loop/variant routes, stop IDs can appear multiple times.
+        # Choose the nearest forward from->to pair.
         query = """
-            WITH stop_seqs AS (
+                        WITH from_candidates AS (
+                                SELECT variant_id, sequence
+                                FROM route_waypoints
+                                WHERE route_id = :route_id
+                                    AND direction = :direction
+                                    AND stop_id = :from_stop
+                        ),
+                        to_candidates AS (
+                                SELECT variant_id, sequence
+                                FROM route_waypoints
+                                WHERE route_id = :route_id
+                                    AND direction = :direction
+                                    AND stop_id = :to_stop
+                        ),
+                        best_pair AS (
                 SELECT
-                    MIN(CASE WHEN stop_id = :from_stop THEN sequence END) AS from_seq,
-                    MIN(CASE WHEN stop_id = :to_stop   THEN sequence END) AS to_seq
-                FROM route_waypoints
-                WHERE route_id = :route_id
-                  AND direction = :direction
+                                        f.variant_id AS variant_id,
+                                        f.sequence AS from_seq,
+                                        t.sequence AS to_seq
+                                FROM from_candidates f
+                                JOIN to_candidates t
+                                    ON t.variant_id = f.variant_id
+                                 AND t.sequence >= f.sequence
+                                ORDER BY (t.sequence - f.sequence), f.sequence
+                                LIMIT 1
             )
             SELECT w.latitude, w.longitude
             FROM route_waypoints w
-            CROSS JOIN stop_seqs
+                        JOIN best_pair b ON b.variant_id = w.variant_id
             WHERE w.route_id  = :route_id
-              AND w.direction  = :direction
-              AND w.sequence  >= COALESCE(stop_seqs.from_seq, 0)
-              AND w.sequence  <= COALESCE(stop_seqs.to_seq,   2147483647)
+                            AND w.direction = :direction
+                            AND w.sequence >= b.from_seq
+                            AND w.sequence <= b.to_seq
             ORDER BY w.sequence
         """
         result = await db.execute(
@@ -68,11 +90,21 @@ async def get_route_waypoints(
         )
     else:
         query = """
+                        WITH best_variant AS (
+                                SELECT variant_id
+                                FROM route_waypoints
+                                WHERE route_id = :route_id
+                                    AND direction = :direction
+                                GROUP BY variant_id
+                                ORDER BY COUNT(*) DESC, variant_id
+                                LIMIT 1
+                        )
             SELECT latitude, longitude
-            FROM route_waypoints
-            WHERE route_id = :route_id
-              AND direction = :direction
-            ORDER BY sequence
+                        FROM route_waypoints w
+                        JOIN best_variant b ON b.variant_id = w.variant_id
+                        WHERE w.route_id = :route_id
+                            AND w.direction = :direction
+                        ORDER BY w.sequence
         """
         result = await db.execute(
             text(query),

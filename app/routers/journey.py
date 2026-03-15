@@ -35,10 +35,12 @@ class JourneyRequest(BaseModel):
     destination_lat: Optional[float] = None
     destination_lon: Optional[float] = None
     departure_time: Optional[str] = None   # HH:MM or HH:MM:SS
-    departure_date: Optional[str] = None   # YYYY-MM-DD, DD/MM/YYYY, or DD-MM-YYYY
+    # YYYY-MM-DD, DD/MM/YYYY, or DD-MM-YYYY
+    departure_date: Optional[str] = None
     preference: Optional[str] = "fastest"  # "fastest" | "least-changes"
     walking_speed: Optional[str] = "medium"  # "slow" | "medium" | "fast"
-    arrive_by: Optional[bool] = False       # False = depart after, True = arrive before
+    # False = depart after, True = arrive before
+    arrive_by: Optional[bool] = False
 
 
 # ---------------------------------------------------------------------------
@@ -107,6 +109,104 @@ async def _resolve_location(
         return lat, lon, nearest, name
 
     return None, None, None, ""
+
+
+async def _fetch_leg_waypoints(
+    db: AsyncSession,
+    route_id: str,
+    direction: str,
+    from_stop: Optional[str],
+    to_stop: Optional[str],
+):
+    """Return ordered [{lat, lon}, ...] waypoints for a bus leg.
+
+    Uses stored route_waypoints geometry and slices by from/to stop when both
+    stop IDs are present.
+
+    For loop/variant routes where stop IDs may appear multiple times, this picks
+    the nearest forward (from_seq <= to_seq) pair. If no valid bounded slice is
+    found, returns an empty list so callers can fall back to OTP geometry.
+    """
+    if not route_id:
+        return []
+
+    direction = direction or "outbound"
+
+    if from_stop and to_stop:
+        query = """
+                        WITH from_candidates AS (
+                                SELECT variant_id, sequence
+                                FROM route_waypoints
+                                WHERE route_id = :route_id
+                                    AND direction = :direction
+                                    AND stop_id = :from_stop
+                        ),
+                        to_candidates AS (
+                                SELECT variant_id, sequence
+                                FROM route_waypoints
+                                WHERE route_id = :route_id
+                                    AND direction = :direction
+                                    AND stop_id = :to_stop
+                        ),
+                        best_pair AS (
+                SELECT
+                                        f.variant_id AS variant_id,
+                                        f.sequence AS from_seq,
+                                        t.sequence AS to_seq
+                                FROM from_candidates f
+                                JOIN to_candidates t
+                                    ON t.variant_id = f.variant_id
+                                 AND t.sequence >= f.sequence
+                                ORDER BY (t.sequence - f.sequence), f.sequence
+                                LIMIT 1
+            )
+            SELECT w.latitude, w.longitude
+            FROM route_waypoints w
+                        JOIN best_pair
+                            ON w.variant_id = best_pair.variant_id
+            WHERE w.route_id  = :route_id
+              AND w.direction = :direction
+                            AND w.sequence >= best_pair.from_seq
+                            AND w.sequence <= best_pair.to_seq
+            ORDER BY w.sequence
+        """
+        result = await db.execute(
+            text(query),
+            {
+                "route_id": route_id,
+                "direction": direction,
+                "from_stop": from_stop,
+                "to_stop": to_stop,
+            },
+        )
+        rows = result.mappings().all()
+        if rows:
+            return [{"lat": row["latitude"], "lon": row["longitude"]} for row in rows]
+        return []
+
+    fallback_query = """
+                WITH best_variant AS (
+                        SELECT variant_id
+                        FROM route_waypoints
+                        WHERE route_id = :route_id
+                            AND direction = :direction
+                        GROUP BY variant_id
+                        ORDER BY COUNT(*) DESC, variant_id
+                        LIMIT 1
+                )
+        SELECT latitude, longitude
+                FROM route_waypoints w
+                JOIN best_variant b ON b.variant_id = w.variant_id
+        WHERE route_id = :route_id
+          AND direction = :direction
+        ORDER BY sequence
+    """
+    fallback = await db.execute(
+        text(fallback_query),
+        {"route_id": route_id, "direction": direction},
+    )
+    rows = fallback.mappings().all()
+    return [{"lat": row["latitude"], "lon": row["longitude"]} for row in rows]
 
 
 # ---------------------------------------------------------------------------
@@ -217,6 +317,24 @@ async def plan_journey(req: JourneyRequest, db: AsyncSession = Depends(get_db)):
             status_code=502,
             detail=f"Journey planning service returned an error: HTTP {exc.response.status_code}.",
         )
+
+    # Enrich bus legs with DB-backed waypoints so the frontend can draw
+    # road-following geometry directly from this endpoint response.
+    waypoint_cache = {}
+    for journey in journeys:
+        for leg in (journey.get("legs") or []):
+            if (leg.get("mode") or "").lower() != "bus":
+                continue
+            route_id = leg.get("route_id") or ""
+            direction = leg.get("direction") or "outbound"
+            from_stop = leg.get("origin_stop_id")
+            to_stop = leg.get("destination_stop_id")
+            cache_key = (route_id, direction, from_stop, to_stop)
+            if cache_key not in waypoint_cache:
+                waypoint_cache[cache_key] = await _fetch_leg_waypoints(
+                    db, route_id, direction, from_stop, to_stop
+                )
+            leg["waypoints"] = waypoint_cache[cache_key]
 
     return {
         "origin": {"stop_id": origin_stop_id, "name": origin_name},

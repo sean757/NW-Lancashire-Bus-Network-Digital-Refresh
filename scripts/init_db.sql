@@ -129,14 +129,16 @@ CREATE TABLE IF NOT EXISTS route_waypoints (
     id              SERIAL PRIMARY KEY,
     route_id        VARCHAR(50) NOT NULL REFERENCES routes(route_id) ON DELETE CASCADE,
     direction       VARCHAR(10) DEFAULT 'outbound',
+    variant_id      VARCHAR(100) NOT NULL DEFAULT 'default',
     sequence        INTEGER NOT NULL,
     latitude        DOUBLE PRECISION NOT NULL,
     longitude       DOUBLE PRECISION NOT NULL,
     stop_id         VARCHAR(20) REFERENCES stops(stop_id),
-    UNIQUE(route_id, direction, sequence)
+    UNIQUE(route_id, direction, variant_id, sequence)
 );
 
 CREATE INDEX IF NOT EXISTS idx_route_waypoints_route ON route_waypoints(route_id, direction);
+CREATE INDEX IF NOT EXISTS idx_route_waypoints_variant ON route_waypoints(route_id, direction, variant_id);
 CREATE INDEX IF NOT EXISTS idx_route_waypoints_stop  ON route_waypoints(stop_id) WHERE stop_id IS NOT NULL;
 
 -- ============================================

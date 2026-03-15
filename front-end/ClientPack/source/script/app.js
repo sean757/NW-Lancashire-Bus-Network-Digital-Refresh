@@ -1812,12 +1812,13 @@ async function drawJourneyOnMap(journey) {
             L.circleMarker(b, { radius: 6, color: legColor, fillColor: '#fff', weight: 2 }).addTo(routeLayerGroup).bindPopup(popupB);
         }
         // Draw route for this (non-walking) leg.
-        // Prefer the geometry that OTP itself used for the planned trip
-        // (leg.otp_waypoints) to avoid mismatches with the route_waypoints
-        // table.  Fall back to the API-server waypoints, then a straight line.
+        // Prefer DB-backed geometry returned directly by /journey/plan,
+        // then OTP geometry, then a direct /routes fallback, then straight line.
         if (a && b) {
             let waypoints = null;
-            if (leg.otp_waypoints && leg.otp_waypoints.length > 1) {
+            if (leg.waypoints && leg.waypoints.length > 1) {
+                waypoints = leg.waypoints.map(pt => [pt.lat, pt.lon]);
+            } else if (leg.otp_waypoints && leg.otp_waypoints.length > 1) {
                 waypoints = leg.otp_waypoints;
             } else {
                 waypoints = await fetchRouteWaypoints(

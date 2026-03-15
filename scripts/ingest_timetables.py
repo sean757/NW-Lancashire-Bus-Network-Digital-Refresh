@@ -168,6 +168,54 @@ def _build_route_id(service_code, line_ref, line_name):
     return service_code
 
 
+def _ensure_route_waypoint_variant_schema(conn):
+    """Ensure route_waypoints supports geometry variants within a direction."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "ALTER TABLE route_waypoints "
+            "ADD COLUMN IF NOT EXISTS variant_id VARCHAR(100)"
+        )
+        cur.execute(
+            "UPDATE route_waypoints "
+            "SET variant_id = 'default' "
+            "WHERE variant_id IS NULL OR variant_id = ''"
+        )
+        cur.execute(
+            "ALTER TABLE route_waypoints "
+            "ALTER COLUMN variant_id SET DEFAULT 'default'"
+        )
+        cur.execute(
+            "ALTER TABLE route_waypoints "
+            "ALTER COLUMN variant_id SET NOT NULL"
+        )
+
+        # Drop legacy uniqueness by (route_id, direction, sequence)
+        # so multiple variants can coexist.
+        cur.execute(
+            "ALTER TABLE route_waypoints "
+            "DROP CONSTRAINT IF EXISTS route_waypoints_route_id_direction_sequence_key"
+        )
+
+        cur.execute("""
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1
+                    FROM pg_constraint
+                    WHERE conname = 'uq_route_waypoints_variant_seq'
+                ) THEN
+                    ALTER TABLE route_waypoints
+                    ADD CONSTRAINT uq_route_waypoints_variant_seq
+                    UNIQUE (route_id, direction, variant_id, sequence);
+                END IF;
+            END$$;
+        """)
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_route_waypoints_variant "
+            "ON route_waypoints(route_id, direction, variant_id)"
+        )
+
+
 def parse_txc_xml(conn, xml_content, operator_code, valid_stops, stop_coords):
     """Parse TransXChange XML and insert into routes, route_stops, timetables, and route_waypoints.
 
@@ -406,6 +454,13 @@ def parse_txc_xml(conn, xml_content, operator_code, valid_stops, stop_coords):
                 description = EXCLUDED.description
         """, routes_batch)
 
+        # Refresh route geometry for these routes so old single-variant/default
+        # rows do not coexist with the newly imported per-variant rows.
+        cur.execute(
+            "DELETE FROM route_waypoints WHERE route_id = ANY(%s)",
+            (list(route_names.keys()),),
+        )
+
         # 5. Collect route_stops rows, then batch-insert.
         route_stops_seen = set()
         route_stops_batch = []
@@ -432,14 +487,16 @@ def parse_txc_xml(conn, xml_content, operator_code, valid_stops, stop_coords):
             """, route_stops_batch)
 
         # 5b. Collect route_waypoints rows, then batch-insert.
-        # Only one set of waypoints per (route_id, direction).
-        inserted_wp_directions = set()
+        # Store one geometry set per (route_id, direction, variant_id).
+        inserted_wp_variants = set()
         waypoints_batch = []
         for route_id, jp_refs in route_pattern_refs.items():
             for jp_id in jp_refs:
                 section_ids, direction = patterns[jp_id]
-                wp_key = (route_id, direction)
-                if wp_key in inserted_wp_directions:
+                variant_id = (pattern_route_refs.get(jp_id)
+                              or jp_id or "default").strip()
+                wp_key = (route_id, direction, variant_id)
+                if wp_key in inserted_wp_variants:
                     continue
 
                 waypoints = []
@@ -471,17 +528,17 @@ def parse_txc_xml(conn, xml_content, operator_code, valid_stops, stop_coords):
 
                 for seq_num, (lat, lon, stop_id) in enumerate(waypoints):
                     waypoints_batch.append(
-                        (route_id, direction, seq_num, lat, lon, stop_id))
+                        (route_id, direction, variant_id, seq_num, lat, lon, stop_id))
 
                 if waypoints:
-                    inserted_wp_directions.add(wp_key)
+                    inserted_wp_variants.add(wp_key)
 
         if waypoints_batch:
             execute_values(cur, """
                 INSERT INTO route_waypoints
-                    (route_id, direction, sequence, latitude, longitude, stop_id)
+                    (route_id, direction, variant_id, sequence, latitude, longitude, stop_id)
                 VALUES %s
-                ON CONFLICT (route_id, direction, sequence) DO NOTHING
+                ON CONFLICT (route_id, direction, variant_id, sequence) DO NOTHING
             """, waypoints_batch)
 
         if timetables_batch:
@@ -575,6 +632,7 @@ def run_ingestion():
     """Main execution logic — fetches all operators from the Discovery API."""
     try:
         conn = psycopg2.connect(**DB_CONFIG)
+        _ensure_route_waypoint_variant_schema(conn)
         # No table creation — schema managed by init_db.sql
 
         # Pre-load stop data once for all operators/files to avoid repeated DB queries.
