@@ -747,12 +747,17 @@ async function updateBusStopMarkers() {
         const lon = parseFloat(stop.longitude);
         if (isNaN(lat) || isNaN(lon)) return;
 
-        // Custom bus-stop icon (DivIcon so it works without external images)
+        const isRailStop = (stop.stop_type || '').toLowerCase() === 'rail';
+        const iconLabel = isRailStop ? 'R' : 'B';
+        const iconColor = isRailStop ? '#7B2CBF' : '#2E5090';
+        const iconAria = isRailStop ? 'Rail stop' : 'Bus stop';
+
+        // Custom stop icon (DivIcon so it works without external images)
         const icon = L.divIcon({
-            className: 'bus-stop-icon',
-            html: `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" role="img" aria-label="Bus stop">
-                <circle cx="16" cy="16" r="15" fill="#2E5090" stroke="white" stroke-width="2.5"/>
-                <text x="16" y="21" font-family="Arial,sans-serif" font-size="15" font-weight="bold" fill="white" text-anchor="middle">B</text>
+            className: isRailStop ? 'rail-stop-icon' : 'bus-stop-icon',
+            html: `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" role="img" aria-label="${iconAria}">
+                <circle cx="16" cy="16" r="15" fill="${iconColor}" stroke="white" stroke-width="2.5"/>
+                <text x="16" y="21" font-family="Arial,sans-serif" font-size="15" font-weight="bold" fill="white" text-anchor="middle">${iconLabel}</text>
             </svg>`,
             iconSize: [32, 32],
             iconAnchor: [16, 16],
@@ -763,7 +768,7 @@ async function updateBusStopMarkers() {
         const marker = L.marker([lat, lon], {
             icon,
             title: label,
-            alt: `Bus stop: ${label}`,
+            alt: `${isRailStop ? 'Rail' : 'Bus'} stop: ${label}`,
         });
 
         // Build popup with "Set as Start" / "Set as End" buttons
@@ -1222,7 +1227,10 @@ const translations = {
         departs: 'DEPARTS',
         arrives: 'ARRIVES',
         bus: 'Bus',
+        train: 'Train',
+        tram: 'Tram',
         walk: 'Walk',
+        serviceTo: 'Service to',
         viewOnMap: '🗺️ View on Map',
         dateTime: 'Date & Time:',
         timeTypeLabel: 'Time Type:',
@@ -1285,7 +1293,10 @@ const translations = {
         departs: '出发',
         arrives: '到达',
         bus: '公交',
+        train: '火车',
+        tram: '电车',
         walk: '步行',
+        serviceTo: '开往',
         viewOnMap: '🗺️ 在地图上查看',
         dateTime: '日期和时间：',
         timeTypeLabel: '时间类型：',
@@ -1882,6 +1893,34 @@ async function drawJourneyOnMap(journey) {
 function renderJourneyList(journeys, departureDate) {
     const t = translations[currentLang] || translations.en;
 
+    const operatorMap = {
+        SCCU: 'Stagecoach',
+        SCMY: 'Stagecoach',
+        ARCT: 'Archway Travel',
+        BLAC: 'Blackpool Transport',
+        KLCO: 'Kirkby Lonsdale Coach Hire',
+        NUTT: 'Transporta North West',
+        TP: 'TransPennine Express',
+        VT: 'Avanti West Coast',
+        GR: 'London North Eastern Railway',
+        GW: 'Great Western Railway',
+        EM: 'East Midlands Railway',
+        AW: 'Transport for Wales',
+        NT: 'Northern',
+        SR: 'ScotRail',
+        SW: 'South Western Railway',
+        SE: 'Southeastern',
+        SN: 'Southern',
+        XR: 'Elizabeth line',
+    };
+
+    function normalizeOperatorName(raw) {
+        if (!raw) return '';
+        const trimmed = String(raw).trim();
+        if (!trimmed) return '';
+        return operatorMap[trimmed] || trimmed;
+    }
+
     // Format departure date as a human-readable label (e.g. "Tuesday 11 Mar")
     let departureDayLabel = '';
     if (departureDate) {
@@ -2027,6 +2066,8 @@ function renderJourneyList(journeys, departureDate) {
             dedupedLegs.push(leg);
         }
 
+        const finalTransitDest = lastBusLeg && (lastBusLeg.destination_stop_name || lastBusLeg.to_stop || lastBusLeg.destination_stop_id) || '';
+
         (dedupedLegs || []).forEach((leg) => {
             const li = document.createElement('li');
             li.className = 'journey-leg';
@@ -2075,13 +2116,34 @@ function renderJourneyList(journeys, departureDate) {
                     li.appendChild(walkTimesDiv);
                 }
             } else {
-                const route = leg.route_name ? `${leg.route_name}` : (leg.route_id || 'Route');
+                const mode = (leg.mode || 'bus').toLowerCase();
+                const isRail = mode === 'rail' || mode === 'train';
+                const isTram = mode === 'tram';
+                const modeIcon = isRail ? '🚆' : (isTram ? '🚋' : '🚌');
+                const modeLabel = isRail ? t.train : (isTram ? t.tram : t.bus);
+
+                const legDestLabel = leg.destination_stop_name || leg.to_stop || leg.destination_stop_id || '';
+                const serviceDest = isRail
+                    ? (leg.rail_service_destination || finalTransitDest || legDestLabel)
+                    : legDestLabel;
+                const route = isRail
+                    ? `${t.serviceTo} ${serviceDest}`.trim()
+                    : (leg.route_name ? `${leg.route_name}` : (leg.route_id || 'Route'));
+
+                const operatorName = normalizeOperatorName(leg.operator || '');
 
                 const routeDiv = document.createElement('div');
                 routeDiv.className = 'journey-leg-route';
                 const routeStrong = document.createElement('strong');
-                routeStrong.textContent = `🚌 ${t.bus} ${route}`;
+                routeStrong.textContent = `${modeIcon} ${modeLabel} ${route}`;
                 routeDiv.appendChild(routeStrong);
+
+                if (operatorName) {
+                    const operatorDiv = document.createElement('div');
+                    operatorDiv.className = 'journey-leg-operator';
+                    operatorDiv.textContent = operatorName;
+                    routeDiv.appendChild(operatorDiv);
+                }
 
                 const stopsDiv = document.createElement('div');
                 stopsDiv.className = 'journey-leg-stops';

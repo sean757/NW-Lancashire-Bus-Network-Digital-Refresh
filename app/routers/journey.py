@@ -318,23 +318,56 @@ async def plan_journey(req: JourneyRequest, db: AsyncSession = Depends(get_db)):
             detail=f"Journey planning service returned an error: HTTP {exc.response.status_code}.",
         )
 
-    # Enrich bus legs with DB-backed waypoints so the frontend can draw
-    # road-following geometry directly from this endpoint response.
+    # Enrich legs:
+    # - Bus legs get DB-backed waypoints for map drawing.
+    # - Rail legs get a service destination name based on the route_id CRS.
     waypoint_cache = {}
+    rail_dest_codes = set()
     for journey in journeys:
         for leg in (journey.get("legs") or []):
-            if (leg.get("mode") or "").lower() != "bus":
-                continue
-            route_id = leg.get("route_id") or ""
-            direction = leg.get("direction") or "outbound"
-            from_stop = leg.get("origin_stop_id")
-            to_stop = leg.get("destination_stop_id")
-            cache_key = (route_id, direction, from_stop, to_stop)
-            if cache_key not in waypoint_cache:
-                waypoint_cache[cache_key] = await _fetch_leg_waypoints(
-                    db, route_id, direction, from_stop, to_stop
-                )
-            leg["waypoints"] = waypoint_cache[cache_key]
+            mode = (leg.get("mode") or "").lower()
+            if mode == "bus":
+                route_id = leg.get("route_id") or ""
+                direction = leg.get("direction") or "outbound"
+                from_stop = leg.get("origin_stop_id")
+                to_stop = leg.get("destination_stop_id")
+                cache_key = (route_id, direction, from_stop, to_stop)
+                if cache_key not in waypoint_cache:
+                    waypoint_cache[cache_key] = await _fetch_leg_waypoints(
+                        db, route_id, direction, from_stop, to_stop
+                    )
+                leg["waypoints"] = waypoint_cache[cache_key]
+            elif mode == "rail":
+                route_id = leg.get("route_id") or ""
+                parts = route_id.split("_")
+                if len(parts) >= 4:
+                    rail_dest_codes.add(parts[-1])
+
+    rail_dest_map = {}
+    if rail_dest_codes:
+        result = await db.execute(
+            text(
+                "SELECT crs_code, stop_name "
+                "FROM stops "
+                "WHERE stop_type = 'rail' AND crs_code = ANY(:codes) AND active = TRUE"
+            ),
+            {"codes": list(rail_dest_codes)},
+        )
+        for row in result.mappings().all():
+            rail_dest_map[(row["crs_code"] or "").upper()] = row["stop_name"]
+
+    if rail_dest_map:
+        for journey in journeys:
+            for leg in (journey.get("legs") or []):
+                if (leg.get("mode") or "").lower() != "rail":
+                    continue
+                route_id = leg.get("route_id") or ""
+                parts = route_id.split("_")
+                if len(parts) >= 4:
+                    dest_code = parts[-1].upper()
+                    dest_name = rail_dest_map.get(dest_code)
+                    if dest_name:
+                        leg["rail_service_destination"] = dest_name
 
     return {
         "origin": {"stop_id": origin_stop_id, "name": origin_name},

@@ -233,7 +233,8 @@ def _parse_legs(otp_legs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             )
 
             try:
-                direction_id = int((trip.get("directionId") or otp_leg.get("directionId")) or 0)
+                direction_id = int(
+                    (trip.get("directionId") or otp_leg.get("directionId")) or 0)
             except (TypeError, ValueError):
                 direction_id = 0
             direction = "inbound" if direction_id == 1 else "outbound"
@@ -252,8 +253,19 @@ def _parse_legs(otp_legs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             leg_geom = otp_leg.get("legGeometry") or {}
             otp_waypoints = _decode_polyline(leg_geom.get("points") or "")
 
+            if mode == "RAIL":
+                mode_label = "rail"
+            elif mode == "TRAM":
+                mode_label = "tram"
+            elif mode == "SUBWAY":
+                mode_label = "subway"
+            elif mode == "FERRY":
+                mode_label = "ferry"
+            else:
+                mode_label = "bus"
+
             transit_leg: Dict[str, Any] = {
-                "mode": "bus",
+                "mode": mode_label,
                 "route_id": route_id,
                 "route_name": route_name,
                 "operator": operator,

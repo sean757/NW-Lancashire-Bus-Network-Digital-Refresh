@@ -272,21 +272,24 @@ def fetch_routes(conn) -> List[Dict]:
     """Return GTFS routes.txt rows for all active routes."""
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT route_id, route_name, operator FROM routes WHERE active = TRUE"
+            "SELECT route_id, route_name, operator, route_type "
+            "FROM routes WHERE active = TRUE"
         )
         rows = cur.fetchall()
 
     result: List[Dict] = []
-    for raw_id, raw_name, raw_operator in rows:
+    for raw_id, raw_name, raw_operator, raw_route_type in rows:
         rid = sanitize_id(raw_id)
         if not rid:
             continue
+        route_type_clean = (raw_route_type or "bus").strip().lower()
+        gtfs_route_type = 2 if route_type_clean == "rail" else ROUTE_TYPE_BUS
         result.append({
             "route_id": rid,
             "agency_id": sanitize_id(raw_operator) or "UNKNOWN",
             "route_short_name": sanitize_name(raw_name, fallback=rid),
             "route_long_name": "",
-            "route_type": ROUTE_TYPE_BUS,
+            "route_type": gtfs_route_type,
         })
     log.info("Exported %d routes.", len(result))
     return result
@@ -387,7 +390,8 @@ def fetch_trips_stop_times_calendar(
 
         # Register trip (keyed by gtfs_tid to keep each route's trips separate)
         if gtfs_tid not in trips_dict:
-            direction_id = 1 if (raw_dir or "").strip().lower() == "inbound" else 0
+            direction_id = 1 if (
+                raw_dir or "").strip().lower() == "inbound" else 0
             trips_dict[gtfs_tid] = {
                 "route_id": rid,
                 "service_id": svc_id,
@@ -425,7 +429,8 @@ def fetch_trips_stop_times_calendar(
         stop_times.extend(rows_for_trip)
 
     if discarded_trips:
-        log.info("Discarded %d trips with fewer than 2 stop_time rows.", discarded_trips)
+        log.info(
+            "Discarded %d trips with fewer than 2 stop_time rows.", discarded_trips)
 
     log.info(
         "Exported %d trips, %d stop_times, %d service calendar entries.",
@@ -477,7 +482,8 @@ def export_gtfs(output_path: str = "gtfs_export.zip") -> None:
         routes = fetch_routes(conn)
 
         log.info("Fetching trips and stop times...")
-        trips, stop_times, calendar = fetch_trips_stop_times_calendar(conn, valid_stop_ids)
+        trips, stop_times, calendar = fetch_trips_stop_times_calendar(
+            conn, valid_stop_ids)
 
         log.info("Writing GTFS ZIP to %s...", output_path)
         write_gtfs_zip(

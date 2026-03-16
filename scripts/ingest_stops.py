@@ -56,13 +56,15 @@ def ingest_data(conn):
     )
 
     insert_query = """
-        INSERT INTO stops (stop_id, stop_name, locality, latitude, longitude, active)
-        VALUES (%s, %s, %s, %s, %s, %s)
+        INSERT INTO stops (stop_id, stop_name, locality, latitude, longitude, stop_type, crs_code, active)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (stop_id) DO UPDATE SET
             stop_name = EXCLUDED.stop_name,
             locality = EXCLUDED.locality,
             latitude = EXCLUDED.latitude,
             longitude = EXCLUDED.longitude,
+            stop_type = EXCLUDED.stop_type,
+            crs_code = EXCLUDED.crs_code,
             active = EXCLUDED.active;
     """
 
@@ -76,13 +78,32 @@ def ingest_data(conn):
                 './/{http://www.naptan.org.uk/}NptgLocalityRef')
             lat = elem.findtext('.//{http://www.naptan.org.uk/}Latitude')
             lon = elem.findtext('.//{http://www.naptan.org.uk/}Longitude')
+            stop_type_raw = elem.findtext(
+                './/{http://www.naptan.org.uk/}StopType')
+            crs_code = elem.findtext('.//{http://www.naptan.org.uk/}CrsRef')
 
             status = (elem.get("Status") or "").strip().lower()
             active = status != "inactive"
 
+            stop_type_clean = (stop_type_raw or "").strip().upper()
+            crs_clean = (crs_code or "").strip().upper() or None
+            is_rail = bool(crs_clean) or stop_type_clean.startswith("R")
+            stop_type_db = "rail" if is_rail else "bus"
+
             if atco_code and name and lat and lon:
-                cur.execute(insert_query, (atco_code, name,
-                            locality, lat, lon, active))
+                cur.execute(
+                    insert_query,
+                    (
+                        atco_code,
+                        name,
+                        locality,
+                        lat,
+                        lon,
+                        stop_type_db,
+                        crs_clean,
+                        active,
+                    ),
+                )
                 count += 1
 
             # Clean up memory

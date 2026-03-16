@@ -200,22 +200,45 @@ async def stops_in_bounds(
     if clamped_min_lat > clamped_max_lat or clamped_min_lon > clamped_max_lon:
         return []
 
-    query = """
-        SELECT stop_id, stop_name, locality, latitude, longitude, stop_type
-        FROM stops
-        WHERE active = TRUE
-          AND latitude  BETWEEN :min_lat AND :max_lat
-          AND longitude BETWEEN :min_lon AND :max_lon
-        ORDER BY stop_name
-        LIMIT :limit
-    """
+        query = """
+                SELECT stop_id, stop_name, locality, latitude, longitude, stop_type, crs_code
+                FROM stops
+                WHERE active = TRUE
+                    AND latitude  BETWEEN :min_lat AND :max_lat
+                    AND longitude BETWEEN :min_lon AND :max_lon
+                ORDER BY stop_name
+                LIMIT :limit
+        """
     result = await db.execute(text(query), {
         "min_lat": clamped_min_lat, "max_lat": clamped_max_lat,
         "min_lon": clamped_min_lon, "max_lon": clamped_max_lon,
         "limit": limit,
     })
     rows = result.mappings().all()
-    return [dict(row) for row in rows]
+
+    # Deduplicate rail stops by CRS code so only one station marker appears.
+    rail_by_crs = {}
+    output = []
+    for row in rows:
+        stop = dict(row)
+        if (stop.get("stop_type") or "").lower() == "rail" and stop.get("crs_code"):
+            crs = stop["crs_code"].upper()
+            existing = rail_by_crs.get(crs)
+            if not existing:
+                rail_by_crs[crs] = stop
+            else:
+                # Prefer the main station entry (often 9100 prefix) over entrances.
+                def _is_primary(s):
+                    return str(s.get("stop_id") or "").startswith("9100")
+
+                if _is_primary(stop) and not _is_primary(existing):
+                    rail_by_crs[crs] = stop
+            continue
+
+        output.append(stop)
+
+    output.extend(rail_by_crs.values())
+    return output
 
 
 @router.get("/{stop_id}")

@@ -15,13 +15,18 @@ CREATE TABLE IF NOT EXISTS stops (
     latitude        DOUBLE PRECISION NOT NULL,
     longitude       DOUBLE PRECISION NOT NULL,
     stop_type       VARCHAR(20) DEFAULT 'bus',      -- bus, rail, tram
+    crs_code        VARCHAR(3),                     -- 3-letter CRS code for rail stops
     active          BOOLEAN DEFAULT TRUE,
     created_at      TIMESTAMP DEFAULT NOW()
 );
 
+ALTER TABLE stops ADD COLUMN IF NOT EXISTS stop_type VARCHAR(20) DEFAULT 'bus';
+ALTER TABLE stops ADD COLUMN IF NOT EXISTS crs_code VARCHAR(3);
+
 CREATE INDEX IF NOT EXISTS idx_stops_locality ON stops(locality);
 CREATE INDEX IF NOT EXISTS idx_stops_coords ON stops(latitude, longitude);
 CREATE INDEX IF NOT EXISTS idx_stops_name ON stops USING gin(to_tsvector('english', stop_name));
+CREATE INDEX IF NOT EXISTS idx_stops_crs ON stops(crs_code);
 
 -- ============================================
 -- ROUTES
