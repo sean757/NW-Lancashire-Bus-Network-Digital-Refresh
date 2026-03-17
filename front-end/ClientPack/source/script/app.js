@@ -27,16 +27,6 @@ let selectedEndItem = null;
 let pendingStartItem = null;
 let pendingEndItem = null;
 
-// Active input awaiting a single map click ('start' | 'end' | { type: 'stop', index: N } | null)
-let activeMapInput = null;
-
-// Intermediate stops array – each entry: { id, item, inputEl, durationEl, markerEl }
-let intermediateStops = [];
-let stopIdCounter = 0;
-
-// Timer to debounce single map clicks (distinguish from double-click)
-let mapSingleClickTimer = null;
-
 // Timers for debounced exact-match lookup
 let fromInputTimer = null;
 let toInputTimer = null;
@@ -173,53 +163,13 @@ function updateMapClickHint() {
     }
     hint.style.display = 'block';
     const t = translations[currentLang] || translations.en;
-    if (activeMapInput !== null) {
-        hint.textContent = t.clickHintMapPick || '🖱️ Click the map to set the selected location';
-    } else if (!selectedStartItem && !selectedEndItem) {
+    if (!selectedStartItem && !selectedEndItem) {
         hint.textContent = t.clickHintStart;
     } else if (selectedStartItem && !selectedEndItem) {
         hint.textContent = t.clickHintEnd;
     } else {
         hint.textContent = t.clickHintReset;
     }
-}
-
-/**
- * Return the <input> element corresponding to the given activeMapInput value.
- */
-function getInputForActiveType(type) {
-    if (type === 'start') return fromInput;
-    if (type === 'end') return toInput;
-    if (type && type.type === 'stop') {
-        const stop = intermediateStops[type.index];
-        return stop ? stop.inputEl : null;
-    }
-    return null;
-}
-
-/**
- * Activate an input for map-click selection.
- * Highlights it and updates the map hint.
- */
-function setActiveMapInput(type) {
-    clearActiveMapInput(false);
-    activeMapInput = type;
-    const inputEl = getInputForActiveType(type);
-    if (inputEl) inputEl.classList.add('map-input-active');
-    updateMapClickHint();
-}
-
-/**
- * Deactivate the current map-click input (remove highlight and reset hint).
- */
-function clearActiveMapInput(resetHint) {
-    if (resetHint === undefined) resetHint = true;
-    if (activeMapInput !== null) {
-        const inputEl = getInputForActiveType(activeMapInput);
-        if (inputEl) inputEl.classList.remove('map-input-active');
-    }
-    activeMapInput = null;
-    if (resetHint) updateMapClickHint();
 }
 
 // Map / state variables
@@ -506,16 +456,6 @@ document.addEventListener('click', (e) => {
     if (!toSuggestions.contains(e.target) && e.target !== toInput) {
         clearToSuggestions();
     }
-    // Clear active map-input mode when clicking outside location inputs and the map
-    if (activeMapInput !== null) {
-        const mapEl = document.getElementById('map');
-        const isOnMap = mapEl && (mapEl === e.target || mapEl.contains(e.target));
-        const isLocationInput = e.target === fromInput || e.target === toInput ||
-            intermediateStops.some(s => s.inputEl === e.target);
-        if (!isOnMap && !isLocationInput) {
-            clearActiveMapInput();
-        }
-    }
 });
 
 // Reposition dropdown on scroll/resize and when input receives focus
@@ -539,10 +479,6 @@ toInput.addEventListener('focus', () => {
         toSuggestions.style.display = 'block';
     }
 });
-
-// Activate map-click mode when a location input is clicked
-fromInput.addEventListener('click', () => setActiveMapInput('start'));
-toInput.addEventListener('click', () => setActiveMapInput('end'));
 
 // Input listener for `toInput`
 toInput.addEventListener('input', async () => {
@@ -717,49 +653,11 @@ function initializeLeafletMap() {
     clickHintControl.addTo(map);
     updateMapClickHint();
 
-    // Handle single map clicks for active-input mode (user clicked an input, then clicks map)
-    map.on('click', (e) => {
-        if (activeMapInput === null) return;
-        // Debounce to avoid triggering on the first click of a double-click
-        if (mapSingleClickTimer) { clearTimeout(mapSingleClickTimer); mapSingleClickTimer = null; }
-        const capturedActive = activeMapInput;
-        const capturedLatLng = e.latlng;
-        mapSingleClickTimer = setTimeout(() => {
-            mapSingleClickTimer = null;
-            if (activeMapInput === null) return; // cleared by dblclick or outside click
-            const item = makeCustomItem(capturedLatLng);
-            const label = getLabelFromItem(item);
-            if (capturedActive === 'start') {
-                if (fromInputTimer) { clearTimeout(fromInputTimer); fromInputTimer = null; }
-                fromInput.value = label;
-                clearFromSuggestions();
-                addStartMarker(item);
-            } else if (capturedActive === 'end') {
-                if (toInputTimer) { clearTimeout(toInputTimer); toInputTimer = null; }
-                toInput.value = label;
-                clearToSuggestions();
-                addEndMarker(item);
-            } else if (capturedActive && capturedActive.type === 'stop') {
-                const stop = intermediateStops[capturedActive.index];
-                if (stop) {
-                    stop.item = item;
-                    stop.inputEl.value = label;
-                    updateStopMarker(capturedActive.index);
-                }
-            }
-            clearActiveMapInput();
-        }, 350);
-    });
-
     // Handle map double-clicks for start / end point selection.
     // 1st double-click  → set start point
     // 2nd double-click  → set end point
     // 3rd+ double-click → reset start (clear existing end) so the user can pick a new route
     map.on('dblclick', (e) => {
-        // Cancel any pending single-click from active input mode
-        if (mapSingleClickTimer) { clearTimeout(mapSingleClickTimer); mapSingleClickTimer = null; }
-        // If an input was active for map click, cancel that mode and let the user try again
-        clearActiveMapInput();
         const item = makeCustomItem(e.latlng);
         const label = getLabelFromItem(item);
         const t = translations[currentLang] || translations.en;
@@ -1283,7 +1181,6 @@ const translations = {
         clickHintStart: '🖱️ Double-click the map to set your start point',
         clickHintEnd: '🖱️ Double-click the map to set your end point',
         clickHintReset: '🖱️ Double-click the map to change your start point',
-        clickHintMapPick: '🖱️ Click the map to set the selected location',
         mapClickNotifyStart: 'Start point set. Now double-click your destination on the map.',
         mapClickNotifyEnd: "End point set. Click 'Plan Route' to continue.",
         mapClickNotifyReset: 'Start point updated. Now double-click your destination on the map.'
@@ -1335,7 +1232,6 @@ const translations = {
         clickHintStart: '🖱️ 双击地图设置起点',
         clickHintEnd: '🖱️ 双击地图设置终点',
         clickHintReset: '🖱️ 双击地图更改起点',
-        clickHintMapPick: '🖱️ 点击地图设置所选位置',
         mapClickNotifyStart: '起点已设置。请在地图上双击目的地。',
         mapClickNotifyEnd: '终点已设置。点击"规划路线"继续。',
         mapClickNotifyReset: '起点已更新。请在地图上双击目的地。'
@@ -1696,166 +1592,6 @@ function initializeRouteDisplayInteractions() {
 }
 
 initializeRouteDisplayInteractions();
-
-// ---------------------------------------------------------------------------
-// Intermediate stop management (Change 3: Add stops with dwell time)
-// ---------------------------------------------------------------------------
-
-/**
- * Add a new intermediate stop row to the UI.
- */
-function addStopRow() {
-    const idx = intermediateStops.length;
-    const id = ++stopIdCounter;
-
-    const stopsContainer = document.getElementById('stopsContainer');
-
-    const row = document.createElement('div');
-    row.className = 'stop-row';
-    row.dataset.stopId = String(id);
-
-    // --- Location input group ---
-    const inputGroup = document.createElement('div');
-    inputGroup.className = 'input-group stop-input-group';
-
-    const inputLabel = document.createElement('label');
-    inputLabel.textContent = `Stop ${idx + 1}:`;
-    inputLabel.setAttribute('for', `stopPoint${id}`);
-
-    const input = document.createElement('input');
-    input.type = 'text';
-    input.id = `stopPoint${id}`;
-    input.placeholder = 'Click here then click the map';
-    input.title = 'Click to activate, then click the map to set this stop location';
-
-    inputGroup.appendChild(inputLabel);
-    inputGroup.appendChild(input);
-
-    // --- Duration selector group ---
-    const durationGroup = document.createElement('div');
-    durationGroup.className = 'input-group stop-duration-group';
-
-    const durationLabel = document.createElement('label');
-    durationLabel.textContent = 'Stop Time:';
-    durationLabel.setAttribute('for', `stopDuration${id}`);
-
-    const durationSelect = document.createElement('select');
-    durationSelect.id = `stopDuration${id}`;
-
-    // Options: 0 min (no stop) up to 120 min, in 5-minute increments
-    for (let m = 0; m <= 120; m += 5) {
-        const opt = document.createElement('option');
-        opt.value = String(m);
-        opt.textContent = m === 0 ? 'No stop' : `${m} min`;
-        if (m === 0) opt.selected = true;
-        durationSelect.appendChild(opt);
-    }
-
-    durationGroup.appendChild(durationLabel);
-    durationGroup.appendChild(durationSelect);
-
-    // --- Remove button ---
-    const removeBtn = document.createElement('button');
-    removeBtn.type = 'button';
-    removeBtn.className = 'remove-stop-btn';
-    removeBtn.textContent = '✕';
-    removeBtn.setAttribute('aria-label', `Remove stop ${idx + 1}`);
-
-    row.appendChild(inputGroup);
-    row.appendChild(durationGroup);
-    row.appendChild(removeBtn);
-    stopsContainer.appendChild(row);
-
-    const stopData = { id, item: null, inputEl: input, labelEl: inputLabel, durationEl: durationSelect, markerEl: null, removeBtn };
-    intermediateStops.push(stopData);
-
-    // Activate map-click mode when the stop input is clicked
-    // Use the stable id to look up the current index at click time
-    input.addEventListener('click', () => {
-        const currentIdx = intermediateStops.findIndex(s => s.id === id);
-        if (currentIdx !== -1) setActiveMapInput({ type: 'stop', index: currentIdx });
-    });
-
-    // Clear the selected item if the user types something different
-    input.addEventListener('input', () => {
-        if (stopData.item) {
-            const q = input.value.trim().toLowerCase();
-            const selLabel = getLabelFromItem(stopData.item).trim().toLowerCase();
-            if (q !== selLabel) {
-                stopData.item = null;
-                if (stopData.markerEl && map) {
-                    map.removeLayer(stopData.markerEl);
-                    stopData.markerEl = null;
-                }
-            }
-        }
-    });
-
-    removeBtn.addEventListener('click', () => removeStopRow(id));
-
-    input.focus();
-}
-
-/**
- * Remove an intermediate stop row by its stable id.
- */
-function removeStopRow(id) {
-    const idx = intermediateStops.findIndex(s => s.id === id);
-    if (idx === -1) return;
-    const stop = intermediateStops[idx];
-
-    // Clear the active map input if it pointed at this stop
-    if (activeMapInput && activeMapInput.type === 'stop' && activeMapInput.index === idx) {
-        clearActiveMapInput();
-    }
-
-    // Remove map marker
-    if (stop.markerEl && map) {
-        map.removeLayer(stop.markerEl);
-    }
-
-    // Remove DOM row
-    const stopsContainer = document.getElementById('stopsContainer');
-    const row = stopsContainer.querySelector(`[data-stop-id="${id}"]`);
-    if (row) stopsContainer.removeChild(row);
-
-    intermediateStops.splice(idx, 1);
-
-    // Update labels for remaining stops
-    intermediateStops.forEach((s, i) => {
-        if (s.labelEl) s.labelEl.textContent = `Stop ${i + 1}:`;
-        if (s.removeBtn) s.removeBtn.setAttribute('aria-label', `Remove stop ${i + 1}`);
-    });
-}
-
-/**
- * Update (or create) the map marker for intermediate stop at position idx.
- */
-function updateStopMarker(idx) {
-    const stop = intermediateStops[idx];
-    if (!stop) return;
-    if (stop.markerEl && map) {
-        map.removeLayer(stop.markerEl);
-        stop.markerEl = null;
-    }
-    if (!stop.item) return;
-    const coords = extractLatLng(stop.item);
-    if (!coords || !map) return;
-    stop.markerEl = L.circleMarker(coords, {
-        radius: 8,
-        fillColor: '#F39C12',
-        color: '#ffffff',
-        weight: 2,
-        fillOpacity: 1,
-    }).addTo(map).bindPopup(`Stop ${idx + 1}: ${getLabelFromItem(stop.item)}`);
-    map.panTo(coords);
-}
-
-// Wire up the "Add Stop" button
-document.addEventListener('DOMContentLoaded', () => {
-    const addStopBtn = document.getElementById('addStopBtn');
-    if (addStopBtn) addStopBtn.addEventListener('click', addStopRow);
-});
 
 async function fetchStop(stop_id) {
     try {
