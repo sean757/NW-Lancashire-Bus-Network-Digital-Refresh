@@ -341,6 +341,90 @@ body {
     background-color: var(--accent-color-hover);
 }
 
+/* Intermediate stops UI */
+.stops-add-row {
+    display: flex;
+    align-items: center;
+}
+
+.add-stop-btn {
+    background: transparent;
+    color: var(--primary-color);
+    border: 1px dashed var(--primary-color);
+    padding: 6px 14px;
+    border-radius: 4px;
+    font-size: 13px;
+    cursor: pointer;
+    transition: background-color 0.2s, color 0.2s;
+    white-space: nowrap;
+}
+
+.add-stop-btn:hover {
+    background-color: var(--primary-color);
+    color: var(--white);
+}
+
+.add-stop-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+#stopsContainer {
+    width: 100%;
+    flex-basis: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.stop-input-row {
+    display: flex;
+    align-items: flex-end;
+    gap: 6px;
+    width: 100%;
+}
+
+.stop-input-row .input-group {
+    flex: 1;
+    min-width: 0;
+}
+
+.remove-stop-btn {
+    background: transparent;
+    color: var(--error-color);
+    border: 1px solid var(--error-color);
+    border-radius: 4px;
+    padding: 6px 10px;
+    font-size: 14px;
+    cursor: pointer;
+    white-space: nowrap;
+    flex-shrink: 0;
+    transition: background-color 0.2s, color 0.2s;
+    margin-bottom: 0;
+    align-self: flex-end;
+    height: 40px;
+}
+
+.remove-stop-btn:hover {
+    background-color: var(--error-color);
+    color: var(--white);
+}
+
+/* Destination weather badge in journey results */
+.journey-dest-weather {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-top: 4px;
+}
+
+.journey-dest-weather img {
+    width: 24px;
+    height: 24px;
+}
+
 /* Map Container */
 .map-container {
     flex: 1;
@@ -349,6 +433,15 @@ body {
     padding: 16px;
     min-height: 0;
     align-items: stretch;
+}
+
+/* Map area wrapper — holds the map and the weather overlay */
+.map-area {
+    flex: 1 1 auto;
+    position: relative;
+    min-height: 500px;
+    display: flex;
+    flex-direction: column;
 }
 
 #map {
@@ -360,7 +453,7 @@ body {
     overflow: hidden;
 }
 
-.route-planner.collapsed~.map-container #map {
+.route-planner.collapsed~.map-container .map-area #map {
     height: 100%;
 }
 
@@ -743,10 +836,10 @@ body.high-contrast .input-group select {
     pointer-events: auto;
 }
 
-/* Weather Widget Styles */
+/* Weather Widget Styles — positioned inside the .map-area wrapper */
 .weather-widget {
-    position: fixed;
-    bottom: 5px;
+    position: absolute;
+    bottom: 10px;
     left: 10px;
     width: 130px;
     background-color: var(--white);
@@ -783,6 +876,17 @@ body.high-contrast .input-group select {
 .weather-temp {
     display: flex;
     flex-direction: column;
+}
+
+.weather-city {
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--primary-color);
+    margin-bottom: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 70px;
 }
 
 .temp-value {
@@ -928,9 +1032,6 @@ body.high-contrast .input-group select {
     .weather-widget {
         width: 120px;
         padding: 8px;
-        bottom: 12px;
-        right: 12px;
-        left: auto;
     }
 
     .weather-icon {
@@ -980,9 +1081,6 @@ body.high-contrast .input-group select {
     .weather-widget {
         width: 108px;
         padding: 6px;
-        bottom: 110px;
-        right: 10px;
-        left: auto;
     }
 
     .weather-icon {
@@ -1005,6 +1103,7 @@ body.high-contrast .input-group select {
         max-height: 38vh;
     }
 
+    .map-area,
     #map {
         min-height: 420px;
     }
@@ -1075,6 +1174,20 @@ body.high-contrast .input-group select {
     #toSuggestions {
         max-height: 200px;
     }
+}
+
+/* Dynamic stop suggestions dropdowns (id="stopSuggestionsN") */
+[id^="stopSuggestions"] {
+    display: none;
+    position: absolute;
+    background: var(--white);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    box-shadow: 0 6px 18px rgba(15, 23, 42, 0.12);
+    z-index: 99999;
+    max-height: 260px;
+    overflow: auto;
+    padding: 6px 0;
 }
 
 /* ── Bus stop map markers ──────────────────────────────────────────────── */
