@@ -2568,32 +2568,14 @@ function renderJourneyList(journeys, departureDate) {
         legsEl.appendChild(ul);
         card.appendChild(legsEl);
 
-        // View on map button (only shown when expanded)
-        const btnRow = document.createElement('div');
-        btnRow.className = 'journey-btn-row';
-        btnRow.style.display = idx === 0 ? 'block' : 'none';
-
-        const viewBtn = document.createElement('button');
-        viewBtn.textContent = t.viewOnMap;
-        viewBtn.className = 'plan-route-btn';
-        viewBtn.style.padding = '6px 14px';
-        viewBtn.style.fontSize = '0.95em';
-        viewBtn.style.fontWeight = '500';
-        viewBtn.style.cursor = 'pointer';
-        viewBtn.addEventListener('click', () => drawJourneyOnMap(j));
-        btnRow.appendChild(viewBtn);
-        card.appendChild(btnRow);
-
         // Toggle expand/collapse on header click
         header.addEventListener('click', () => {
             // Collapse all other journeys
             document.querySelectorAll('.journey-card').forEach((otherCard) => {
                 const otherLegs = otherCard.querySelector('.journey-legs');
-                const otherBtnRow = otherCard.querySelector('.journey-btn-row');
                 const otherToggle = otherCard.querySelector('.journey-toggle-icon');
                 if (otherCard !== card) {
                     if (otherLegs) otherLegs.style.display = 'none';
-                    if (otherBtnRow) otherBtnRow.style.display = 'none';
                     if (otherToggle) otherToggle.textContent = '▶';
                 }
             });
@@ -2601,7 +2583,6 @@ function renderJourneyList(journeys, departureDate) {
             // Toggle current journey
             const isExpanded = legsEl.style.display === 'block';
             legsEl.style.display = isExpanded ? 'none' : 'block';
-            btnRow.style.display = isExpanded ? 'none' : 'block';
             toggleIcon.textContent = isExpanded ? '▶' : '▼';
 
             if (!isExpanded) {
