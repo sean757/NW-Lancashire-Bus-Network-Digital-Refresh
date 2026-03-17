@@ -753,7 +753,31 @@ async function fetchStopsForBoundsWithFallback(bounds) {
         }
     }
 
-    return inBounds;
+    // Deduplicate rail stops client-side (same logic as backend)
+    // to ensure only one station marker appears per CRS code
+    const railByCrs = {};
+    const output = [];
+
+    inBounds.forEach((stop) => {
+        if ((stop.stop_type || '').toLowerCase() === 'rail' && stop.crs_code) {
+            const crs = stop.crs_code.toUpperCase();
+            const existing = railByCrs[crs];
+            if (!existing) {
+                railByCrs[crs] = stop;
+            } else {
+                // Prefer the main station entry (9100 prefix) over entrances
+                const isPrimary = (s) => String(s.stop_id || '').startsWith('9100');
+                if (isPrimary(stop) && !isPrimary(existing)) {
+                    railByCrs[crs] = stop;
+                }
+            }
+        } else {
+            output.push(stop);
+        }
+    });
+
+    output.push(...Object.values(railByCrs));
+    return output;
 }
 
 async function updateBusStopMarkers() {
@@ -1938,6 +1962,119 @@ async function drawJourneyOnMap(journey) {
     }
 }
 
+/**
+ * Open a modal showing detailed information about a journey leg.
+ * Displays: operator, route number, direction, and all stops on the route.
+ */
+function openLegDetailsModal(leg, modeLabel, operatorName, routeName) {
+    const t = translations[currentLang] || translations.en;
+
+    // Create overlay backdrop
+    const backdrop = document.createElement('div');
+    backdrop.className = 'leg-modal-backdrop';
+    backdrop.addEventListener('click', () => {
+        backdrop.remove();
+    });
+
+    // Create modal
+    const modal = document.createElement('div');
+    modal.className = 'leg-modal';
+
+    // Close button
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'leg-modal-close';
+    closeBtn.setAttribute('aria-label', 'Close');
+    closeBtn.textContent = '✕';
+    closeBtn.addEventListener('click', () => {
+        backdrop.remove();
+    });
+
+    // Modal header
+    const header = document.createElement('div');
+    header.className = 'leg-modal-header';
+
+    const title = document.createElement('h3');
+    title.textContent = routeName || 'Route Details';
+    header.appendChild(title);
+    header.appendChild(closeBtn);
+
+    // Modal body
+    const body = document.createElement('div');
+    body.className = 'leg-modal-body';
+
+    // Operator
+    if (operatorName) {
+        const operatorSection = document.createElement('div');
+        operatorSection.className = 'leg-modal-section';
+        const operatorLabel = document.createElement('strong');
+        operatorLabel.textContent = 'Operator:';
+        const operatorValue = document.createElement('div');
+        operatorValue.textContent = operatorName;
+        operatorSection.appendChild(operatorLabel);
+        operatorSection.appendChild(operatorValue);
+        body.appendChild(operatorSection);
+    }
+
+    // Direction
+    if (leg.direction) {
+        const directionSection = document.createElement('div');
+        directionSection.className = 'leg-modal-section';
+        const directionLabel = document.createElement('strong');
+        directionLabel.textContent = 'Direction:';
+        const directionValue = document.createElement('div');
+        directionValue.textContent = leg.direction.charAt(0).toUpperCase() + leg.direction.slice(1);
+        directionSection.appendChild(directionLabel);
+        directionSection.appendChild(directionValue);
+        body.appendChild(directionSection);
+    }
+
+    // From and To
+    const fromToSection = document.createElement('div');
+    fromToSection.className = 'leg-modal-section';
+    const fromToLabel = document.createElement('strong');
+    fromToLabel.textContent = 'Journey:';
+    const fromToValue = document.createElement('div');
+    fromToValue.innerHTML = `
+        <div><strong>${leg.origin_stop_name || leg.from_stop || leg.origin_stop_id || 'Start'}</strong></div>
+        <div style="text-align: center; color: #999; margin: 4px 0;">↓</div>
+        <div><strong>${leg.destination_stop_name || leg.to_stop || leg.destination_stop_id || 'End'}</strong></div>
+    `;
+    fromToSection.appendChild(fromToLabel);
+    fromToSection.appendChild(fromToValue);
+    body.appendChild(fromToSection);
+
+    // Times
+    if (leg.departure_time || leg.arrival_time) {
+        const timesSection = document.createElement('div');
+        timesSection.className = 'leg-modal-section';
+        const timesLabel = document.createElement('strong');
+        timesLabel.textContent = 'Times:';
+        const timesValue = document.createElement('div');
+        let timesHTML = '';
+        if (leg.departure_time) {
+            timesHTML += `<div>Depart: <span style="color: var(--journey-departs-color); font-weight: 600;">${leg.departure_time}</span></div>`;
+        }
+        if (leg.arrival_time) {
+            timesHTML += `<div>Arrive: <span style="color: var(--journey-arrives-color); font-weight: 600;">${leg.arrival_time}</span></div>`;
+        }
+        timesValue.innerHTML = timesHTML;
+        timesSection.appendChild(timesLabel);
+        timesSection.appendChild(timesValue);
+        body.appendChild(timesSection);
+    }
+
+    // Additional info message
+    const infoMsg = document.createElement('div');
+    infoMsg.className = 'leg-modal-info';
+    infoMsg.textContent = 'For full route stop list, use the journey map view or contact the operator.';
+    body.appendChild(infoMsg);
+
+    modal.appendChild(header);
+    modal.appendChild(body);
+    backdrop.appendChild(modal);
+    document.body.appendChild(backdrop);
+}
+
 function renderJourneyList(journeys, departureDate) {
     const t = translations[currentLang] || translations.en;
 
@@ -1967,6 +2104,25 @@ function renderJourneyList(journeys, departureDate) {
         const trimmed = String(raw).trim();
         if (!trimmed) return '';
         return operatorMap[trimmed] || trimmed;
+    }
+
+    // Build journey mode sequence (e.g. "Walk → Bus → Train → Walk")
+    function buildModeSequence(legs) {
+        if (!legs || legs.length === 0) return '';
+        const modes = [];
+        for (const leg of legs) {
+            const mode = (leg.mode || 'bus').toLowerCase();
+            if (mode === 'walk') {
+                if (!modes.length || modes[modes.length - 1] !== '🚶') modes.push('🚶');
+            } else if (mode === 'rail' || mode === 'train') {
+                modes.push('🚆');
+            } else if (mode === 'tram') {
+                modes.push('🚋');
+            } else {
+                modes.push('🚌');
+            }
+        }
+        return modes.join(' → ');
     }
 
     // Format departure date as a human-readable label (e.g. "Tuesday 11 Mar")
@@ -2007,12 +2163,17 @@ function renderJourneyList(journeys, departureDate) {
         }
     }
 
-    // Build a compact list with clear departure/arrival times and per-leg details
+    // Build a compact list with collapsible journey cards
     const container = document.createElement('div');
     container.className = 'journey-list';
+
+    // Track which journey is currently expanded
+    let expandedJourneyIdx = 0;
+
     dedupedJourneys.forEach((j, idx) => {
         const card = document.createElement('div');
         card.className = 'journey-card';
+        card.dataset.journeyIdx = idx;
 
         // Get all non-walk legs for finding first and last transit stops
         const busLegs = j.legs && j.legs.filter(l => (l.mode || 'bus') !== 'walk') || [];
@@ -2024,9 +2185,22 @@ function renderJourneyList(journeys, departureDate) {
         const firstLeg = allLegs.length > 0 ? allLegs[0] : null;
         const lastLeg = allLegs.length > 0 ? allLegs[allLegs.length - 1] : null;
 
-        // Header: route summary + departure/arrival
+        // Build mode sequence (e.g. "🚶 → 🚌 → 🚆 → 🚶")
+        const modeSequence = buildModeSequence(j.legs || []);
+
+        // Header: clickable collapse/expand toggle
         const header = document.createElement('div');
         header.className = 'journey-card-header';
+        header.style.cursor = 'pointer';
+
+        // Left side: Mode sequence + origin/destination
+        const summarySection = document.createElement('div');
+        summarySection.className = 'journey-summary-section';
+
+        const modeBar = document.createElement('div');
+        modeBar.className = 'journey-mode-sequence';
+        modeBar.textContent = modeSequence;
+        summarySection.appendChild(modeBar);
 
         const summary = document.createElement('div');
         summary.className = 'journey-summary';
@@ -2037,7 +2211,7 @@ function renderJourneyList(journeys, departureDate) {
 
         const arrowEl = document.createElement('div');
         arrowEl.className = 'journey-stop-arrow';
-        arrowEl.textContent = '↓';
+        arrowEl.textContent = '→';
 
         const destEl = document.createElement('div');
         destEl.className = 'journey-stop-name';
@@ -2046,7 +2220,9 @@ function renderJourneyList(journeys, departureDate) {
         summary.appendChild(originEl);
         summary.appendChild(arrowEl);
         summary.appendChild(destEl);
+        summarySection.appendChild(summary);
 
+        // Right side: Times
         const times = document.createElement('div');
         times.className = 'journey-times';
 
@@ -2084,14 +2260,21 @@ function renderJourneyList(journeys, departureDate) {
         times.appendChild(depBlock);
         times.appendChild(arrBlock);
 
-        header.appendChild(summary);
+        // Expand/collapse toggle indicator
+        const toggleIcon = document.createElement('div');
+        toggleIcon.className = 'journey-toggle-icon';
+        toggleIcon.textContent = idx === 0 ? '▼' : '▶';
+
+        header.appendChild(summarySection);
         header.appendChild(times);
+        header.appendChild(toggleIcon);
 
         card.appendChild(header);
 
-        // Per-leg details
+        // Per-leg details (hidden when collapsed)
         const legsEl = document.createElement('div');
         legsEl.className = 'journey-legs';
+        legsEl.style.display = idx === 0 ? 'block' : 'none'; // Show first journey by default
 
         const ul = document.createElement('ul');
         ul.className = 'journey-legs-list';
@@ -2124,21 +2307,24 @@ function renderJourneyList(journeys, departureDate) {
 
                 const walkLabel = document.createElement('span');
                 walkLabel.className = 'journey-leg-walk-label';
-                walkLabel.textContent = `🚶 ${t.walk}: `;
+                walkLabel.textContent = `🚶 ${t.walk}`;
 
                 const walkDetail = document.createElement('span');
                 walkDetail.className = 'journey-leg-walk-detail';
                 walkDetail.textContent = `${leg.from_stop || leg.from || ''} → ${leg.to_stop || leg.to || leg.to_stop || ''}`;
 
-                li.appendChild(walkLabel);
-                li.appendChild(walkDetail);
+                const walkContainer = document.createElement('div');
+                walkContainer.appendChild(walkLabel);
+                walkContainer.appendChild(walkDetail);
 
                 if (leg.distance_km) {
                     const distEl = document.createElement('span');
                     distEl.className = 'journey-leg-walk-distance';
                     distEl.textContent = ` (${leg.distance_km} km)`;
-                    li.appendChild(distEl);
+                    walkDetail.appendChild(distEl);
                 }
+
+                li.appendChild(walkContainer);
 
                 if (leg.departure_time || leg.arrival_time) {
                     const walkTimesDiv = document.createElement('div');
@@ -2180,23 +2366,37 @@ function renderJourneyList(journeys, departureDate) {
 
                 const operatorName = normalizeOperatorName(leg.operator || '');
 
-                const routeDiv = document.createElement('div');
-                routeDiv.className = 'journey-leg-route';
+                // Compact leg header with info button
+                const legHeader = document.createElement('div');
+                legHeader.className = 'journey-leg-header';
+
+                const legRoute = document.createElement('div');
+                legRoute.className = 'journey-leg-route';
                 const routeStrong = document.createElement('strong');
                 routeStrong.textContent = `${modeIcon} ${modeLabel} ${route}`;
-                routeDiv.appendChild(routeStrong);
+                legRoute.appendChild(routeStrong);
 
-                if (operatorName) {
-                    const operatorDiv = document.createElement('div');
-                    operatorDiv.className = 'journey-leg-operator';
-                    operatorDiv.textContent = operatorName;
-                    routeDiv.appendChild(operatorDiv);
-                }
+                // Info button
+                const infoBtn = document.createElement('button');
+                infoBtn.className = 'journey-leg-info-btn';
+                infoBtn.setAttribute('aria-label', `Info for ${route}`);
+                infoBtn.textContent = 'ℹ️';
+                infoBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    openLegDetailsModal(leg, modeLabel, operatorName, route);
+                });
 
+                legHeader.appendChild(legRoute);
+                legHeader.appendChild(infoBtn);
+                li.appendChild(legHeader);
+
+                // Compact stops display
                 const stopsDiv = document.createElement('div');
                 stopsDiv.className = 'journey-leg-stops';
                 stopsDiv.textContent = `${leg.origin_stop_name || leg.from_stop || leg.origin_stop_id || ''} → ${leg.destination_stop_name || leg.to_stop || leg.destination_stop_id || ''}`;
+                li.appendChild(stopsDiv);
 
+                // Times
                 const timesDiv = document.createElement('div');
                 timesDiv.className = 'journey-leg-times';
 
@@ -2219,8 +2419,6 @@ function renderJourneyList(journeys, departureDate) {
                     timesDiv.appendChild(arrSpan);
                 }
 
-                li.appendChild(routeDiv);
-                li.appendChild(stopsDiv);
                 li.appendChild(timesDiv);
             }
             ul.appendChild(li);
@@ -2228,8 +2426,11 @@ function renderJourneyList(journeys, departureDate) {
         legsEl.appendChild(ul);
         card.appendChild(legsEl);
 
+        // View on map button (only shown when expanded)
         const btnRow = document.createElement('div');
         btnRow.className = 'journey-btn-row';
+        btnRow.style.display = idx === 0 ? 'block' : 'none';
+
         const viewBtn = document.createElement('button');
         viewBtn.textContent = t.viewOnMap;
         viewBtn.className = 'plan-route-btn';
@@ -2240,6 +2441,31 @@ function renderJourneyList(journeys, departureDate) {
         viewBtn.addEventListener('click', () => drawJourneyOnMap(j));
         btnRow.appendChild(viewBtn);
         card.appendChild(btnRow);
+
+        // Toggle expand/collapse on header click
+        header.addEventListener('click', () => {
+            // Collapse all other journeys
+            document.querySelectorAll('.journey-card').forEach((otherCard) => {
+                const otherLegs = otherCard.querySelector('.journey-legs');
+                const otherBtnRow = otherCard.querySelector('.journey-btn-row');
+                const otherToggle = otherCard.querySelector('.journey-toggle-icon');
+                if (otherCard !== card) {
+                    if (otherLegs) otherLegs.style.display = 'none';
+                    if (otherBtnRow) otherBtnRow.style.display = 'none';
+                    if (otherToggle) otherToggle.textContent = '▶';
+                }
+            });
+
+            // Toggle current journey
+            const isExpanded = legsEl.style.display === 'block';
+            legsEl.style.display = isExpanded ? 'none' : 'block';
+            btnRow.style.display = isExpanded ? 'none' : 'block';
+            toggleIcon.textContent = isExpanded ? '▶' : '▼';
+
+            if (!isExpanded) {
+                drawJourneyOnMap(j);
+            }
+        });
 
         container.appendChild(card);
     });
