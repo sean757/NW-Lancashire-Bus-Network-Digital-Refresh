@@ -2098,14 +2098,14 @@ function openLegDetailsModal(leg, modeLabel, operatorName, routeName) {
         const inlineLoadWrap = document.createElement('div');
         inlineLoadWrap.className = 'leg-modal-inline-load-wrap';
 
+        const loadToEndArrow = document.createElement('div');
+        loadToEndArrow.className = 'leg-modal-journey-arrow';
+        loadToEndArrow.textContent = '↓';
+
         const loadBtn = document.createElement('button');
         loadBtn.className = 'leg-modal-load-stops-btn';
         loadBtn.type = 'button';
         loadBtn.textContent = 'Load Stops';
-
-        const loadBtnArrow = document.createElement('div');
-        loadBtnArrow.className = 'leg-modal-journey-arrow';
-        loadBtnArrow.textContent = '↓';
 
         const renderStops = (stops) => {
             intermediateStopsWrap.innerHTML = '';
@@ -2166,11 +2166,12 @@ function openLegDetailsModal(leg, modeLabel, operatorName, routeName) {
             loadStatus.textContent = '';
             renderStops(payload.stops);
             inlineLoadWrap.remove();
+            loadToEndArrow.remove();
         });
 
         inlineLoadWrap.appendChild(loadBtn);
-        inlineLoadWrap.appendChild(loadBtnArrow);
         fromToValue.appendChild(inlineLoadWrap);
+        fromToValue.appendChild(loadToEndArrow);
     }
 
     const endStopName = document.createElement('div');
@@ -2284,20 +2285,30 @@ function renderJourneyList(journeys, departureDate) {
         return;
     }
 
-    // Deduplicate journeys: skip if same departure/arrival times and route structure
+    // Deduplicate journeys: keep distinct walking/transit patterns.
+    // Previous logic only keyed by transit legs and could hide itineraries that
+    // differ mainly by walking amount/segments.
     const dedupedJourneys = [];
     const seenKeys = new Set();
     for (const j of journeys) {
-        const busLegs = (j.legs || []).filter(l => (l.mode || 'bus') !== 'walk');
-        const firstLeg = busLegs.length > 0 ? busLegs[0] : null;
-        const lastLeg = busLegs.length > 0 ? busLegs[busLegs.length - 1] : null;
-
-        // Create a unique key based on first departure, last arrival, and route IDs
-        const routeIds = (j.legs || [])
-            .filter(l => (l.mode || 'bus') !== 'walk')
-            .map(l => l.route_id || '')
-            .join('|');
-        const key = `${firstLeg?.departure_time || ''}|${lastLeg?.arrival_time || ''}|${routeIds}`;
+        const legs = j.legs || [];
+        const key = legs.map((l) => {
+            const mode = (l.mode || 'bus').toLowerCase();
+            if (mode === 'walk') {
+                const from = (l.from_stop || l.from || '').trim();
+                const to = (l.to_stop || l.to || '').trim();
+                const dist = Number(l.distance_km || 0).toFixed(3);
+                return `walk:${from}->${to}:${l.departure_time || ''}:${l.arrival_time || ''}:${dist}`;
+            }
+            return [
+                mode,
+                l.route_id || '',
+                l.origin_stop_id || l.origin_stop_name || l.from_stop || '',
+                l.destination_stop_id || l.destination_stop_name || l.to_stop || '',
+                l.departure_time || '',
+                l.arrival_time || '',
+            ].join(':');
+        }).join('|');
 
         if (!seenKeys.has(key)) {
             seenKeys.add(key);
