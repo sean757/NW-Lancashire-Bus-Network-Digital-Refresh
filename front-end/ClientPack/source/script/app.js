@@ -27,6 +27,11 @@ let selectedEndItem = null;
 let pendingStartItem = null;
 let pendingEndItem = null;
 
+// Intermediate stops state (up to MAX_STOPS entries)
+const MAX_STOPS = 3;
+let stopItems = [];        // array of selected location items (same shape as selectedStartItem)
+let stopInputTimers = [];  // debounce timers for each stop input
+
 // Timers for debounced exact-match lookup
 let fromInputTimer = null;
 let toInputTimer = null;
@@ -1874,6 +1879,266 @@ async function ensureSelectedFromInput(isStart = true) {
     return false;
 }
 
+/**
+ * Ensure a stop at a given index is resolved (typed text → stop item).
+ * @param {number} idx - Index into stopItems / stop input elements
+ */
+async function ensureStopResolved(idx) {
+    if (stopItems[idx]) return true;
+    const inputs = document.querySelectorAll('.stop-point-input');
+    const input = inputs[idx];
+    if (!input) return false;
+    const q = input.value && input.value.trim();
+    if (!q) return false;
+    try {
+        const results = await getPossibleLocations(q);
+        if (results && results.length) {
+            const match = results.find(it => (getLabelFromItem(it) || '').trim().toLowerCase() === q.toLowerCase()) || results[0];
+            if (match) {
+                stopItems[idx] = match;
+                return true;
+            }
+        }
+    } catch (err) {
+        console.error('ensureStopResolved error', err);
+    }
+    return false;
+}
+
+/**
+ * Refresh the Add Stop button state based on current stop count.
+ */
+function refreshAddStopBtn() {
+    const btn = document.getElementById('addStopBtn');
+    if (!btn) return;
+    const count = document.querySelectorAll('.stop-input-row').length;
+    btn.disabled = count >= MAX_STOPS;
+}
+
+/**
+ * Create and append a new intermediate stop input row.
+ */
+function addStopRow() {
+    const container = document.getElementById('stopsContainer');
+    if (!container) return;
+    const currentCount = container.querySelectorAll('.stop-input-row').length;
+    if (currentCount >= MAX_STOPS) return;
+
+    const idx = currentCount; // 0-based index for this stop
+    stopItems[idx] = null;
+    stopInputTimers[idx] = null;
+
+    // Create row wrapper
+    const row = document.createElement('div');
+    row.className = 'stop-input-row';
+    row.dataset.stopIdx = String(idx);
+
+    // Input group
+    const group = document.createElement('div');
+    group.className = 'input-group';
+
+    const label = document.createElement('label');
+    label.textContent = `Via Stop ${idx + 1}:`;
+    label.htmlFor = `stopPoint${idx}`;
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.id = `stopPoint${idx}`;
+    input.className = 'stop-point-input';
+    input.placeholder = 'Enter intermediate stop';
+    input.dataset.idx = String(idx);
+
+    group.appendChild(label);
+    group.appendChild(input);
+
+    // Remove button
+    const removeBtn = document.createElement('button');
+    removeBtn.type = 'button';
+    removeBtn.className = 'remove-stop-btn';
+    removeBtn.setAttribute('aria-label', `Remove stop ${idx + 1}`);
+    removeBtn.textContent = '✕';
+    removeBtn.addEventListener('click', () => {
+        removeStopRow(row, idx);
+    });
+
+    row.appendChild(group);
+    row.appendChild(removeBtn);
+    container.appendChild(row);
+
+    // Create suggestions dropdown for this stop
+    const suggestions = document.createElement('div');
+    suggestions.id = `stopSuggestions${idx}`;
+    suggestions.className = 'suggestions-dropdown';
+    document.body.appendChild(suggestions);
+
+    // Input → suggestions
+    input.addEventListener('input', async () => {
+        const stopIdx = parseInt(input.dataset.idx, 10);
+        const q = input.value.trim();
+        if (stopItems[stopIdx]) {
+            const sel = getLabelFromItem(stopItems[stopIdx]).trim().toLowerCase();
+            if (q.toLowerCase() !== sel) stopItems[stopIdx] = null;
+        }
+        if (q.length < 3) { clearStopSuggestions(stopIdx); return; }
+        try {
+            const locs = await getPossibleLocations(q);
+            renderStopSuggestions(stopIdx, locs || [], input);
+        } catch (err) {
+            clearStopSuggestions(stopIdx);
+        }
+    });
+
+    // Debounced exact-match lookup
+    input.addEventListener('input', () => {
+        const stopIdx = parseInt(input.dataset.idx, 10);
+        if (stopInputTimers[stopIdx]) clearTimeout(stopInputTimers[stopIdx]);
+        const q = input.value.trim();
+        if (!q) return;
+        showInputLoading(input);
+        stopInputTimers[stopIdx] = setTimeout(async () => {
+            stopInputTimers[stopIdx] = null;
+            hideInputLoading(input);
+            if (!q) return;
+            if (stopItems[stopIdx] && getLabelFromItem(stopItems[stopIdx]).trim().toLowerCase() === q.toLowerCase()) return;
+            try {
+                const locs = await getPossibleLocations(q);
+                if (locs && locs.length) {
+                    const match = locs.find(it => getLabelFromItem(it).trim().toLowerCase() === q.toLowerCase());
+                    if (match) { stopItems[stopIdx] = match; clearStopSuggestions(stopIdx); }
+                }
+            } catch (err) { /* silent */ }
+        }, 2000);
+    });
+
+    input.addEventListener('keydown', (e) => {
+        const stopIdx = parseInt(input.dataset.idx, 10);
+        const sug = document.getElementById(`stopSuggestions${stopIdx}`);
+        if (sug) handleInputKeydown(e, input, sug);
+    });
+
+    input.focus();
+    refreshAddStopBtn();
+}
+
+function clearStopSuggestions(idx) {
+    const sug = document.getElementById(`stopSuggestions${idx}`);
+    if (!sug) return;
+    sug.innerHTML = '';
+    sug.style.display = 'none';
+}
+
+function renderStopSuggestions(idx, items, inputEl) {
+    clearStopSuggestions(idx);
+    if (!items || items.length === 0) return;
+    const sug = document.getElementById(`stopSuggestions${idx}`);
+    if (!sug) return;
+
+    const list = document.createElement('ul');
+    list.setAttribute('role', 'listbox');
+    list.className = 'suggestions-list';
+    items.slice(0, 5).forEach((it, i) => {
+        const label = getLabelFromItem(it);
+        const li = document.createElement('li');
+        li.className = 'suggestion-item';
+        li.setAttribute('role', 'option');
+        li.setAttribute('data-index', String(i));
+        li.tabIndex = 0;
+        li.textContent = label;
+        li.addEventListener('click', () => {
+            stopItems[idx] = it;
+            if (inputEl) inputEl.value = label;
+            clearStopSuggestions(idx);
+            if (inputEl) inputEl.focus();
+            if (stopInputTimers[idx]) { clearTimeout(stopInputTimers[idx]); stopInputTimers[idx] = null; hideInputLoading(inputEl); }
+        });
+        li.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); li.click(); } });
+        list.appendChild(li);
+    });
+    sug._items = items;
+    sug.appendChild(list);
+
+    // Position below the input
+    const rect = inputEl.getBoundingClientRect();
+    const scrollY = window.scrollY || window.pageYOffset;
+    const scrollX = window.scrollX || window.pageXOffset;
+    sug.style.width = rect.width + 'px';
+    sug.style.left = (rect.left + scrollX) + 'px';
+    sug.style.top = (rect.bottom + scrollY + 6) + 'px';
+    sug.style.display = 'block';
+    sug.dataset.active = '-1';
+}
+
+/**
+ * Remove a stop row and clean up state.
+ */
+function removeStopRow(row, removedIdx) {
+    const container = document.getElementById('stopsContainer');
+    if (!container) return;
+
+    // Remove associated suggestions dropdown
+    const sug = document.getElementById(`stopSuggestions${removedIdx}`);
+    if (sug) sug.remove();
+
+    row.remove();
+
+    // Re-index remaining rows
+    const rows = container.querySelectorAll('.stop-input-row');
+    const newStopItems = [];
+    const newTimers = [];
+    rows.forEach((r, newIdx) => {
+        const oldIdx = parseInt(r.dataset.stopIdx, 10);
+        r.dataset.stopIdx = String(newIdx);
+
+        const inp = r.querySelector('.stop-point-input');
+        if (inp) {
+            inp.dataset.idx = String(newIdx);
+            inp.id = `stopPoint${newIdx}`;
+        }
+        const lbl = r.querySelector('label');
+        if (lbl) { lbl.textContent = `Via Stop ${newIdx + 1}:`; lbl.htmlFor = `stopPoint${newIdx}`; }
+
+        const removeBtn = r.querySelector('.remove-stop-btn');
+        if (removeBtn) {
+            removeBtn.setAttribute('aria-label', `Remove stop ${newIdx + 1}`);
+            // Re-bind click with new idx
+            const newRemoveBtn = removeBtn.cloneNode(true);
+            newRemoveBtn.addEventListener('click', () => removeStopRow(r, newIdx));
+            removeBtn.replaceWith(newRemoveBtn);
+        }
+
+        // Move old suggestions dropdown ID
+        const oldSug = document.getElementById(`stopSuggestions${oldIdx}`);
+        if (oldSug && oldIdx !== newIdx) { oldSug.id = `stopSuggestions${newIdx}`; }
+
+        newStopItems[newIdx] = stopItems[oldIdx] || null;
+        newTimers[newIdx] = null;
+    });
+
+    stopItems.length = 0;
+    stopInputTimers.length = 0;
+    newStopItems.forEach((it, i) => { stopItems[i] = it; stopInputTimers[i] = null; });
+
+    refreshAddStopBtn();
+}
+
+// Wire up the "Add Stop" button
+document.addEventListener('DOMContentLoaded', () => {
+    const addStopBtn = document.getElementById('addStopBtn');
+    if (addStopBtn) {
+        addStopBtn.addEventListener('click', () => addStopRow());
+    }
+
+    // Close stop suggestions on outside click
+    document.addEventListener('click', (e) => {
+        const inputs = document.querySelectorAll('.stop-point-input');
+        inputs.forEach((inp) => {
+            const idx = parseInt(inp.dataset.idx, 10);
+            const sug = document.getElementById(`stopSuggestions${idx}`);
+            if (sug && !sug.contains(e.target) && e.target !== inp) clearStopSuggestions(idx);
+        });
+    });
+});
+
 // Distinct colours used to distinguish consecutive bus legs on the map.
 const LEG_COLOURS = ['#E74C3C', '#8E44AD', '#2980B9', '#27AE60', '#F39C12', '#16A085', '#D35400', '#2C3E50'];
 
@@ -2621,59 +2886,67 @@ planRouteBtn.addEventListener('click', async () => {
     await ensureSelectedFromInput(true);
     await ensureSelectedFromInput(false);
 
-    // Prepare request body using stop_id if available, fallback to coords
-    const body = {};
-    if (selectedStartItem && selectedStartItem.stop_id) {
-        body.origin_stop_id = selectedStartItem.stop_id;
-    } else if (selectedStartItem) {
-        const c = extractLatLng(selectedStartItem);
-        if (c) {
-            body.origin_lat = c[0];
-            body.origin_lon = c[1];
-        }
-    } else if (fromInput.value) {
-        // try to use typed coordinates if present as lat,lon
-        const parts = fromInput.value.split(',').map(s => s.trim());
-        if (parts.length === 2) { body.origin_lat = parseFloat(parts[0]); body.origin_lon = parseFloat(parts[1]); }
+    // Resolve any typed (un-picked) intermediate stop inputs
+    const stopCount = document.querySelectorAll('.stop-input-row').length;
+    for (let i = 0; i < stopCount; i++) {
+        await ensureStopResolved(i);
     }
 
-    if (selectedEndItem && selectedEndItem.stop_id) {
-        body.destination_stop_id = selectedEndItem.stop_id;
-    } else if (selectedEndItem) {
-        const c = extractLatLng(selectedEndItem);
-        if (c) {
-            body.destination_lat = c[0];
-            body.destination_lon = c[1];
+    /**
+     * Build an origin/destination sub-object from a location item.
+     * Returns partial body fields (origin_* or destination_*) with the
+     * given prefix ('origin' or 'destination').
+     */
+    function locationToBodyFields(item, prefix, rawInput) {
+        if (item && item.stop_id) return { [`${prefix}_stop_id`]: item.stop_id };
+        if (item) {
+            const c = extractLatLng(item);
+            if (c) return { [`${prefix}_lat`]: c[0], [`${prefix}_lon`]: c[1] };
         }
-    } else if (toInput.value) {
-        const parts = toInput.value.split(',').map(s => s.trim());
-        if (parts.length === 2) { body.destination_lat = parseFloat(parts[0]); body.destination_lon = parseFloat(parts[1]); }
+        if (rawInput) {
+            const parts = rawInput.split(',').map(s => s.trim());
+            if (parts.length === 2) {
+                const la = parseFloat(parts[0]), lo = parseFloat(parts[1]);
+                if (!isNaN(la) && !isNaN(lo)) return { [`${prefix}_lat`]: la, [`${prefix}_lon`]: lo };
+            }
+        }
+        return null;
     }
 
-    // Add request parameters
-    body.preference = pathfinding;
-    body.walking_speed = walkingSpeed;
-    body.arrive_by = (timeType === 'arrive-before');
-    if (departureTimeInput) {
-        // datetime-local value is "YYYY-MM-DDTHH:MM" — split into date and time
-        const tIdx = departureTimeInput.indexOf('T');
-        if (tIdx !== -1) {
-            body.departure_date = departureTimeInput.slice(0, tIdx);
-            body.departure_time = departureTimeInput.slice(tIdx + 1);
-        } else {
-            body.departure_time = departureTimeInput;
-        }
-    }
+    const originFields = locationToBodyFields(selectedStartItem, 'origin', fromInput && fromInput.value);
+    const destFields   = locationToBodyFields(selectedEndItem,   'destination', toInput && toInput.value);
 
     // Basic validation
-    if ((!body.origin_stop_id && (body.origin_lat == null || body.origin_lon == null)) || (!body.destination_stop_id && (body.destination_lat == null || body.destination_lon == null))) {
+    if (!originFields || !destFields) {
         routeContent.innerHTML = `<p class="journey-no-results">${t.selectValidPoints}</p>`;
         return;
     }
 
+    // Collect active stops (only resolved ones)
+    const activeStops = [];
+    for (let i = 0; i < stopCount; i++) {
+        if (stopItems[i]) activeStops.push(stopItems[i]);
+    }
+
+    // Build common request parameters
+    const commonParams = { preference: pathfinding, walking_speed: walkingSpeed, arrive_by: (timeType === 'arrive-before') };
+    if (departureTimeInput) {
+        const tIdx = departureTimeInput.indexOf('T');
+        if (tIdx !== -1) {
+            commonParams.departure_date = departureTimeInput.slice(0, tIdx);
+            commonParams.departure_time = departureTimeInput.slice(tIdx + 1);
+        } else {
+            commonParams.departure_time = departureTimeInput;
+        }
+    }
+
     routeContent.innerHTML = `<p>${t.planningRoute}</p>`;
 
-    try {
+    /**
+     * Call /journey/plan for a single origin→destination pair.
+     */
+    async function planSegment(originF, destinationF) {
+        const body = Object.assign({}, originF, destinationF, commonParams);
         const res = await fetch(`${apiUrl}/journey/plan`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -2683,10 +2956,92 @@ planRouteBtn.addEventListener('click', async () => {
             const txt = await res.text();
             throw new Error(`Server returned ${res.status}: ${txt}`);
         }
-        const data = await res.json();
-        // DEBUG console.log('Journey response received:', JSON.stringify(data, null, 2));
-        // data.journeys is an array
-        renderJourneyList(data.journeys || [], data.departure_date || null);
+        return res.json();
+    }
+
+    try {
+        let allJourneys;
+        let departureDate = null;
+
+        if (activeStops.length === 0) {
+            // Simple point-to-point query (original behaviour)
+            const data = await planSegment(originFields, destFields);
+            allJourneys = data.journeys || [];
+            departureDate = data.departure_date || null;
+
+            // Fetch destination weather and show it
+            fetchAndShowDestinationWeather(selectedEndItem, data.destination);
+        } else {
+            // Multi-leg: chain segments origin → stop[0] → stop[1] → … → dest
+            const waypoints = [
+                { item: selectedStartItem, rawInput: fromInput && fromInput.value },
+                ...activeStops.map(it => ({ item: it, rawInput: null })),
+                { item: selectedEndItem, rawInput: toInput && toInput.value },
+            ];
+
+            // Request journeys for each segment in sequence, taking the best (first) result
+            const segmentJourneys = [];
+            let currentTime = commonParams.departure_time;
+            let currentDate = commonParams.departure_date;
+
+            for (let seg = 0; seg < waypoints.length - 1; seg++) {
+                const from = waypoints[seg];
+                const to   = waypoints[seg + 1];
+                const oF = locationToBodyFields(from.item, 'origin', from.rawInput);
+                const dF = locationToBodyFields(to.item,   'destination', to.rawInput);
+                if (!oF || !dF) {
+                    throw new Error(`Could not resolve waypoint between "${getLabelFromItem(from.item) || 'stop'}" and "${getLabelFromItem(to.item) || 'stop'}"`);
+                }
+                const segParams = Object.assign({}, commonParams, { departure_time: currentTime, departure_date: currentDate });
+                const body = Object.assign({}, oF, dF, segParams);
+                const res = await fetch(`${apiUrl}/journey/plan`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body),
+                });
+                if (!res.ok) {
+                    const txt = await res.text();
+                    throw new Error(`Server returned ${res.status}: ${txt}`);
+                }
+                const segData = await res.json();
+                if (!departureDate) departureDate = segData.departure_date || null;
+                const segJourneys = segData.journeys || [];
+                if (segJourneys.length === 0) {
+                    const fromName = getLabelFromItem(from.item) || `waypoint ${seg + 1}`;
+                    const toName   = getLabelFromItem(to.item)   || `waypoint ${seg + 2}`;
+                    throw new Error(`No routes found between "${fromName}" and "${toName}"`);
+                }
+                const bestSeg = segJourneys[0];
+                segmentJourneys.push(bestSeg);
+
+                // Advance departure time to arrival of this segment (+ 5 min transfer buffer)
+                const segLegs = bestSeg.legs || [];
+                const lastLeg = segLegs[segLegs.length - 1];
+                if (lastLeg && lastLeg.arrival_time) {
+                    // Parse HH:MM, add 5 minutes transfer buffer
+                    const [hh, mm] = lastLeg.arrival_time.split(':').map(Number);
+                    if (!isNaN(hh) && !isNaN(mm)) {
+                        const totalMins = hh * 60 + mm + 5;
+                        const nh = Math.floor(totalMins / 60) % 24;
+                        const nm = totalMins % 60;
+                        currentTime = `${String(nh).padStart(2, '0')}:${String(nm).padStart(2, '0')}`;
+                    } else {
+                        currentTime = lastLeg.arrival_time;
+                    }
+                    if (segData.departure_date) currentDate = segData.departure_date;
+                }
+            }
+
+            // Combine all segment legs into one merged journey
+            const mergedLegs = segmentJourneys.flatMap(seg => seg.legs || []);
+            allJourneys = [{ legs: mergedLegs }];
+
+            // Fetch destination weather for the final destination
+            fetchAndShowDestinationWeather(selectedEndItem, null);
+        }
+
+        renderJourneyList(allJourneys, departureDate);
+
         // Auto-collapse planner
         const routePlanner = document.querySelector('.route-planner');
         const plannerToggle = document.getElementById('plannerToggle');
@@ -2701,6 +3056,50 @@ planRouteBtn.addEventListener('click', async () => {
         clearRouteLayers();
     }
 });
+
+/**
+ * Fetch weather for the journey destination and inject a badge into the
+ * route-display header.
+ *
+ * @param {object|null} destItem  - The selected destination item (may have lat/lon)
+ * @param {object|null} destData  - The destination object from the API response ({stop_id, name})
+ */
+async function fetchAndShowDestinationWeather(destItem, destData) {
+    // Remove any previous destination weather badge
+    const old = document.getElementById('destWeatherBadge');
+    if (old) old.remove();
+
+    if (typeof fetchWeatherData !== 'function') return;
+
+    let lat = null, lon = null;
+    if (destItem) {
+        const c = extractLatLng(destItem);
+        if (c) { lat = c[0]; lon = c[1]; }
+    }
+    if (lat == null || lon == null) return;
+
+    const data = await fetchWeatherData(lat, lon);
+    if (!data || !data.weather) return;
+
+    const wd = data.weather;
+    const temp = Math.round(wd.main.temp);
+    const icon = wd.weather[0].icon;
+    const desc = wd.weather[0].description;
+    const cityName = (destData && destData.name) || wd.name || '';
+
+    const badge = document.createElement('div');
+    badge.id = 'destWeatherBadge';
+    badge.className = 'journey-dest-weather';
+    badge.title = `Weather at ${cityName || 'destination'}: ${desc}`;
+    badge.innerHTML = `
+        <img src="https://openweathermap.org/img/wn/${icon}.png" alt="${desc}">
+        <span>${temp}°C at ${cityName || 'destination'}</span>
+    `;
+
+    // Insert after the "Route Information" h3
+    const h3 = document.querySelector('.route-display h3');
+    if (h3) h3.insertAdjacentElement('afterend', badge);
+}
 
 // Note: This function will be reimplemented for Leaflet.js in a future update
 /*
