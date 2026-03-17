@@ -697,6 +697,65 @@ function initializeLeafletMap() {
  * Fetch bus stops within the current map bounds and render them as
  * clickable Leaflet markers.  Only active when zoom >= BUS_STOP_ZOOM_THRESHOLD.
  */
+async function fetchStopsForBoundsWithFallback(bounds) {
+    const params = new URLSearchParams({
+        min_lat: bounds.getSouth(),
+        max_lat: bounds.getNorth(),
+        min_lon: bounds.getWest(),
+        max_lon: bounds.getEast(),
+        limit: 200,
+    });
+
+    // Primary: dedicated bounds endpoint
+    try {
+        const res = await fetch(`${apiUrl}/stops/bounds?${params}`);
+        if (res.ok) {
+            const rows = await res.json();
+            if (Array.isArray(rows)) return rows;
+        }
+    } catch (err) {
+        console.warn('Bounds stop lookup failed, trying fallback:', err);
+    }
+
+    // Fallback: page through /stops and filter client-side by viewport.
+    // This keeps stop icons available even if /stops/bounds fails.
+    const inBounds = [];
+    const pageSize = 500;
+    const maxPages = 12; // hard cap to avoid excessive requests
+
+    for (let page = 0; page < maxPages; page++) {
+        const offset = page * pageSize;
+        try {
+            const res = await fetch(`${apiUrl}/stops?limit=${pageSize}&offset=${offset}`);
+            if (!res.ok) break;
+
+            const rows = await res.json();
+            if (!Array.isArray(rows) || rows.length === 0) break;
+
+            rows.forEach((stop) => {
+                const lat = parseFloat(stop.latitude);
+                const lon = parseFloat(stop.longitude);
+                if (isNaN(lat) || isNaN(lon)) return;
+                if (
+                    lat >= bounds.getSouth() &&
+                    lat <= bounds.getNorth() &&
+                    lon >= bounds.getWest() &&
+                    lon <= bounds.getEast()
+                ) {
+                    inBounds.push(stop);
+                }
+            });
+
+            if (rows.length < pageSize) break;
+        } catch (err) {
+            console.error('Fallback stop pagination failed:', err);
+            break;
+        }
+    }
+
+    return inBounds;
+}
+
 async function updateBusStopMarkers() {
     if (!map) return;
 
@@ -715,21 +774,10 @@ async function updateBusStopMarkers() {
         return;
     }
 
-    const bounds = map.getBounds();
-    const params = new URLSearchParams({
-        min_lat: bounds.getSouth(),
-        max_lat: bounds.getNorth(),
-        min_lon: bounds.getWest(),
-        max_lon: bounds.getEast(),
-        limit: 200,
-    });
-
     let stops = [];
     try {
-        const res = await fetch(`${apiUrl}/stops/bounds?${params}`);
-        if (res.ok) {
-            stops = await res.json();
-        }
+        const bounds = map.getBounds();
+        stops = await fetchStopsForBoundsWithFallback(bounds);
     } catch (err) {
         console.error('Failed to fetch bus stops for map view:', err);
         return;

@@ -200,15 +200,15 @@ async def stops_in_bounds(
     if clamped_min_lat > clamped_max_lat or clamped_min_lon > clamped_max_lon:
         return []
 
-        query = """
-                SELECT stop_id, stop_name, locality, latitude, longitude, stop_type, crs_code
-                FROM stops
-                WHERE active = TRUE
-                    AND latitude  BETWEEN :min_lat AND :max_lat
-                    AND longitude BETWEEN :min_lon AND :max_lon
-                ORDER BY stop_name
-                LIMIT :limit
-        """
+    query = """
+            SELECT stop_id, stop_name, locality, latitude, longitude, stop_type, crs_code
+            FROM stops
+            WHERE active = TRUE
+                AND latitude  BETWEEN :min_lat AND :max_lat
+                AND longitude BETWEEN :min_lon AND :max_lon
+            ORDER BY stop_name
+            LIMIT :limit
+    """
     result = await db.execute(text(query), {
         "min_lat": clamped_min_lat, "max_lat": clamped_max_lat,
         "min_lon": clamped_min_lon, "max_lon": clamped_max_lon,
