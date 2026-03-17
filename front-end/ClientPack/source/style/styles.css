@@ -1614,21 +1614,22 @@ body.map-night-mode #map .leaflet-control-attribution a {
 .leg-modal-close {
     background: none;
     border: none;
-    font-size: 1.5em;
+    font-size: 1.9em;
+    line-height: 1;
+    font-weight: 400;
     cursor: pointer;
     color: var(--text-muted);
-    padding: 4px;
-    width: 32px;
-    height: 32px;
+    padding: 0 4px;
+    width: auto;
+    height: auto;
     display: flex;
     align-items: center;
     justify-content: center;
-    border-radius: 4px;
-    transition: background-color 0.2s, color 0.2s;
+    border-radius: 0;
+    transition: color 0.2s;
 }
 
 .leg-modal-close:hover {
-    background-color: var(--background-color);
     color: var(--text-color);
 }
 
@@ -1661,6 +1662,87 @@ body.map-night-mode #map .leaflet-control-attribution a {
     color: var(--text-color);
     font-size: 1em;
     line-height: 1.5;
+}
+
+.leg-modal-journey-fromto {
+    text-align: center;
+}
+
+.leg-modal-stop-name {
+    text-align: center;
+}
+
+.leg-modal-journey-arrow {
+    text-align: center;
+    color: #999;
+    margin: 4px 0;
+}
+
+.leg-modal-intermediate-wrap {
+    margin: 0;
+}
+
+.leg-modal-load-stops-btn {
+    margin-top: 6px;
+    background-color: var(--journey-stop-color);
+    color: var(--white);
+    border: none;
+    border-radius: 6px;
+    padding: 8px 12px;
+    cursor: pointer;
+    font-weight: 600;
+}
+
+.leg-modal-inline-load-wrap {
+    text-align: center;
+}
+
+.leg-modal-load-stops-btn:disabled {
+    opacity: 0.75;
+    cursor: not-allowed;
+}
+
+.leg-modal-load-status {
+    margin-top: 8px;
+    color: var(--text-muted);
+    font-size: 0.92em;
+}
+
+.leg-modal-stops-container {
+    margin-top: 10px;
+}
+
+.leg-modal-stop-list {
+    margin: 0;
+    padding-left: 18px;
+}
+
+.leg-modal-stop-item {
+    margin-bottom: 8px;
+}
+
+.leg-modal-stop-item-name {
+    text-align: center;
+    font-weight: 600;
+}
+
+.leg-modal-stop-item-times {
+    text-align: center;
+    font-size: 0.92em;
+}
+
+.leg-modal-time-depart {
+    color: var(--journey-departs-color);
+    font-weight: 600;
+}
+
+.leg-modal-time-arrive {
+    color: var(--journey-arrives-color);
+    font-weight: 600;
+}
+
+.leg-modal-time-sep {
+    color: var(--text-muted);
 }
 
 /* Info message */

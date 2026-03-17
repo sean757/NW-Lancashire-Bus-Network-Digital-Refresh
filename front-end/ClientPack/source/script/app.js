@@ -1743,6 +1743,9 @@ function clearRouteLayers() {
 
 // Cache for route waypoints responses keyed by "route_id|direction|from_stop|to_stop"
 const waypointsCache = {};
+// Cache for route stops-between responses keyed by
+// "route_id|direction|from_stop|to_stop|departure_time"
+const routeStopsBetweenCache = {};
 
 /**
  * Fetch ordered waypoints for a bus route leg from the backend.
@@ -1777,6 +1780,37 @@ async function fetchRouteWaypoints(routeId, direction, fromStop, toStop) {
     } catch (err) {
         console.error('fetchRouteWaypoints error:', err);
         waypointsCache[cacheKey] = null;
+        return null;
+    }
+}
+
+/**
+ * Fetch ordered stop calls between origin/destination for one route leg.
+ * Returns an object with { stops: [...] } or null if unavailable.
+ */
+async function fetchRouteStopsBetween(routeId, direction, fromStop, toStop, departureTime) {
+    if (!routeId || !fromStop || !toStop) return null;
+    const cacheKey = `${routeId}|${direction || ''}|${fromStop}|${toStop}|${departureTime || ''}`;
+    if (routeStopsBetweenCache[cacheKey] !== undefined) return routeStopsBetweenCache[cacheKey];
+
+    try {
+        let url = `${apiUrl}/routes/${encodeURIComponent(routeId)}/stops-between`;
+        url += `?from_stop=${encodeURIComponent(fromStop)}`;
+        url += `&to_stop=${encodeURIComponent(toStop)}`;
+        if (direction) url += `&direction=${encodeURIComponent(direction)}`;
+        if (departureTime) url += `&departure_time=${encodeURIComponent(departureTime)}`;
+
+        const res = await fetch(url);
+        if (!res.ok) {
+            routeStopsBetweenCache[cacheKey] = null;
+            return null;
+        }
+        const data = await res.json();
+        routeStopsBetweenCache[cacheKey] = data;
+        return data;
+    } catch (err) {
+        console.error('fetchRouteStopsBetween error:', err);
+        routeStopsBetweenCache[cacheKey] = null;
         return null;
     }
 }
@@ -1972,9 +2006,6 @@ function openLegDetailsModal(leg, modeLabel, operatorName, routeName) {
     // Create overlay backdrop
     const backdrop = document.createElement('div');
     backdrop.className = 'leg-modal-backdrop';
-    backdrop.addEventListener('click', () => {
-        backdrop.remove();
-    });
 
     // Create modal
     const modal = document.createElement('div');
@@ -1984,10 +2015,14 @@ function openLegDetailsModal(leg, modeLabel, operatorName, routeName) {
     const closeBtn = document.createElement('button');
     closeBtn.className = 'leg-modal-close';
     closeBtn.setAttribute('aria-label', 'Close');
-    closeBtn.textContent = '✕';
+    closeBtn.textContent = '×';
     closeBtn.addEventListener('click', () => {
         backdrop.remove();
     });
+
+    const canLoadIntermediateStops = !!(
+        leg.route_id && leg.origin_stop_id && leg.destination_stop_id
+    );
 
     // Modal header
     const header = document.createElement('div');
@@ -2034,13 +2069,120 @@ function openLegDetailsModal(leg, modeLabel, operatorName, routeName) {
     const fromToLabel = document.createElement('strong');
     fromToLabel.textContent = 'Journey:';
     const fromToValue = document.createElement('div');
-    fromToValue.innerHTML = `
-        <div><strong>${leg.origin_stop_name || leg.from_stop || leg.origin_stop_id || 'Start'}</strong></div>
-        <div style="text-align: center; color: #999; margin: 4px 0;">↓</div>
-        <div><strong>${leg.destination_stop_name || leg.to_stop || leg.destination_stop_id || 'End'}</strong></div>
-    `;
+    fromToValue.className = 'leg-modal-journey-fromto';
+    const startStopName = document.createElement('div');
+    startStopName.className = 'leg-modal-stop-name';
+    const startStopStrong = document.createElement('strong');
+    startStopStrong.textContent = leg.origin_stop_name || leg.from_stop || leg.origin_stop_id || 'Start';
+    startStopName.appendChild(startStopStrong);
+
+    const journeyArrow = document.createElement('div');
+    journeyArrow.className = 'leg-modal-journey-arrow';
+    journeyArrow.textContent = '↓';
+
+    fromToValue.appendChild(startStopName);
+    fromToValue.appendChild(journeyArrow);
+
+    const intermediateStopsWrap = document.createElement('div');
+    intermediateStopsWrap.className = 'leg-modal-intermediate-wrap';
+    fromToValue.appendChild(intermediateStopsWrap);
+
+    const loadStatus = document.createElement('div');
+    loadStatus.className = 'leg-modal-load-status';
+
+    const normalizeStopId = (value) => String(value || '').trim().toLowerCase();
+    const originIdNorm = normalizeStopId(leg.origin_stop_id);
+    const destinationIdNorm = normalizeStopId(leg.destination_stop_id);
+
+    if (canLoadIntermediateStops) {
+        const inlineLoadWrap = document.createElement('div');
+        inlineLoadWrap.className = 'leg-modal-inline-load-wrap';
+
+        const loadBtn = document.createElement('button');
+        loadBtn.className = 'leg-modal-load-stops-btn';
+        loadBtn.type = 'button';
+        loadBtn.textContent = 'Load Stops';
+
+        const loadBtnArrow = document.createElement('div');
+        loadBtnArrow.className = 'leg-modal-journey-arrow';
+        loadBtnArrow.textContent = '↓';
+
+        const renderStops = (stops) => {
+            intermediateStopsWrap.innerHTML = '';
+
+            if (!Array.isArray(stops) || stops.length === 0) {
+                return;
+            }
+
+            const intermediateStops = stops.filter((s) => {
+                const sid = normalizeStopId(s && s.stop_id);
+                if (!sid) return true;
+                return sid !== originIdNorm && sid !== destinationIdNorm;
+            });
+
+            if (intermediateStops.length === 0) {
+                return;
+            }
+
+            intermediateStops.forEach((s, idx) => {
+                const stopEl = document.createElement('div');
+                stopEl.className = 'leg-modal-stop-name';
+
+                const stopStrong = document.createElement('strong');
+                const name = s.stop_name || s.stop_id || `Stop ${idx + 1}`;
+                const arr = s.arrival_time || '';
+                stopStrong.textContent = arr ? `${name} (${arr})` : name;
+
+                stopEl.appendChild(stopStrong);
+                intermediateStopsWrap.appendChild(stopEl);
+
+                const arrowEl = document.createElement('div');
+                arrowEl.className = 'leg-modal-journey-arrow';
+                arrowEl.textContent = '↓';
+                intermediateStopsWrap.appendChild(arrowEl);
+            });
+        };
+
+        loadBtn.addEventListener('click', async () => {
+            loadBtn.disabled = true;
+            loadBtn.textContent = 'Loading…';
+            loadStatus.textContent = '';
+
+            const payload = await fetchRouteStopsBetween(
+                leg.route_id,
+                leg.direction,
+                leg.origin_stop_id,
+                leg.destination_stop_id,
+                leg.departure_time,
+            );
+
+            if (!payload || !Array.isArray(payload.stops)) {
+                loadStatus.textContent = 'Could not load route stops for this leg.';
+                loadBtn.disabled = false;
+                loadBtn.textContent = 'Load Stops';
+                return;
+            }
+
+            loadStatus.textContent = '';
+            renderStops(payload.stops);
+            inlineLoadWrap.remove();
+        });
+
+        inlineLoadWrap.appendChild(loadBtn);
+        inlineLoadWrap.appendChild(loadBtnArrow);
+        fromToValue.appendChild(inlineLoadWrap);
+    }
+
+    const endStopName = document.createElement('div');
+    endStopName.className = 'leg-modal-stop-name';
+    const endStopStrong = document.createElement('strong');
+    endStopStrong.textContent = leg.destination_stop_name || leg.to_stop || leg.destination_stop_id || 'End';
+    endStopName.appendChild(endStopStrong);
+    fromToValue.appendChild(endStopName);
+
     fromToSection.appendChild(fromToLabel);
     fromToSection.appendChild(fromToValue);
+    fromToSection.appendChild(loadStatus);
     body.appendChild(fromToSection);
 
     // Times
@@ -2066,7 +2208,7 @@ function openLegDetailsModal(leg, modeLabel, operatorName, routeName) {
     // Additional info message
     const infoMsg = document.createElement('div');
     infoMsg.className = 'leg-modal-info';
-    infoMsg.textContent = 'For full route stop list, use the journey map view or contact the operator.';
+    infoMsg.textContent = 'Tip: click “Load Stops” to view all calls and times for this leg.';
     body.appendChild(infoMsg);
 
     modal.appendChild(header);

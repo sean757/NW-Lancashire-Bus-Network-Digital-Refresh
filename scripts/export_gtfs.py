@@ -329,11 +329,18 @@ def fetch_trips_stop_times_calendar(
         )
         rows = cur.fetchall()
 
-    # Keyed by the globally-unique GTFS trip_id string.
+    # Keyed by exported GTFS trip_id string.
     trips_dict: Dict[str, Dict] = {}
     calendars: Dict[str, Dict] = {}
     # gtfs_trip_id -> list of stop_time rows (validated)
     st_by_trip: Dict[str, List[Dict]] = defaultdict(list)
+
+    # Keep trips distinct per service/calendar.  Some feeds reuse the same
+    # VehicleJourneyCode (thus trip_id) across multiple validity windows.
+    # If we keyed only by trip_id, later rows could be merged into a single
+    # GTFS trip and inherit the wrong service_id.
+    trip_variant_to_export_id: Dict[Tuple[str, str], str] = {}
+    base_trip_services: Dict[str, Set[str]] = defaultdict(set)
 
     skipped_invalid = 0
     skipped_unknown_stop = 0
@@ -388,20 +395,33 @@ def fetch_trips_stop_times_calendar(
                 "end_date":   gtfs_date(valid_until) if valid_until else gtfs_date(DEFAULT_END_DATE),
             }
 
-        # Register trip (keyed by gtfs_tid to keep each route's trips separate)
-        if gtfs_tid not in trips_dict:
+        # Build a service-scoped GTFS trip_id so one logical trip reused across
+        # multiple service windows becomes multiple GTFS trips (as required).
+        variant_key = (gtfs_tid, svc_id)
+        if variant_key not in trip_variant_to_export_id:
+            if not base_trip_services[gtfs_tid]:
+                export_tid = gtfs_tid
+            else:
+                export_tid = f"{gtfs_tid}__{svc_id}"
+            trip_variant_to_export_id[variant_key] = export_tid
+            base_trip_services[gtfs_tid].add(svc_id)
+        else:
+            export_tid = trip_variant_to_export_id[variant_key]
+
+        # Register trip (keyed by exported trip_id to keep service variants separate)
+        if export_tid not in trips_dict:
             direction_id = 1 if (
                 raw_dir or "").strip().lower() == "inbound" else 0
-            trips_dict[gtfs_tid] = {
+            trips_dict[export_tid] = {
                 "route_id": rid,
                 "service_id": svc_id,
-                "trip_id": gtfs_tid,
+                "trip_id": export_tid,
                 "trip_headsign": "",
                 "direction_id": direction_id,
             }
 
-        st_by_trip[gtfs_tid].append({
-            "trip_id": gtfs_tid,
+        st_by_trip[export_tid].append({
+            "trip_id": export_tid,
             "arrival_time": arr,
             "departure_time": dep,
             "stop_id": sid,
