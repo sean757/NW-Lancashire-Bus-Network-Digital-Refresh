@@ -55,11 +55,12 @@
     --journey-leg-border: #2E5090;
     --journey-walk-border: #95a5a6;
     --journey-walk-label-color: #7f8c8d;
+    --journey-leg-hover-bg: rgba(46, 80, 144, 0.06);
+    --journey-leg-highlight-bg: #fffde7;
 
     /* Map overlays */
     --map-instructions-bg: rgba(46, 80, 144, 0.9);
     --map-zoom-hint-bg: rgba(16, 35, 69, 0.88);
-    --map-click-hint-bg: rgba(39, 100, 180, 0.88);
 
     /* Button hover / darker accent */
     --accent-color-hover: #229954;
@@ -243,7 +244,7 @@ body {
     max-height: 500px;
     overflow: hidden;
     transition: max-height 0.3s ease, padding 0.3s ease;
-    padding: 25px 30px;
+    padding: 20px 30px;
 }
 
 .route-planner.collapsed .planner-content {
@@ -253,14 +254,16 @@ body {
 
 .planner-row {
     display: flex;
-    gap: 20px;
-    margin-bottom: 15px;
+    gap: 16px;
+    margin-bottom: 16px;
     flex-wrap: wrap;
     align-items: flex-end;
 }
 
 .planner-row:last-child {
     margin-bottom: 0;
+    padding-top: 16px;
+    border-top: 1px solid var(--border-light);
 }
 
 .input-group {
@@ -323,6 +326,14 @@ body {
     border-color: var(--primary-color);
 }
 
+/* Persistent highlight applied via JS when an input is awaiting a map click,
+   so the box stays visually selected even after browser focus moves to the map. */
+.input-group input.map-input-picking {
+    outline: none;
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 3px rgba(46, 80, 144, 0.18);
+}
+
 .plan-route-btn {
     background-color: var(--accent-color);
     color: var(--white);
@@ -330,32 +341,153 @@ body {
     padding: 11px 30px;
     border-radius: 4px;
     font-size: 16px;
-    font-weight: 500;
+    font-weight: 600;
     cursor: pointer;
-    transition: background-color 0.3s;
+    transition: background-color 0.3s, box-shadow 0.2s;
     min-width: 150px;
+    letter-spacing: 0.01em;
 }
 
 .plan-route-btn:hover {
     background-color: var(--accent-color-hover);
+    box-shadow: 0 3px 8px rgba(39, 174, 96, 0.3);
+}
+
+/* Intermediate stops UI */
+.stops-add-row {
+    display: flex;
+    align-items: flex-end;
+}
+
+.add-stop-btn {
+    background: transparent;
+    color: var(--primary-color);
+    border: 2px solid var(--primary-color);
+    padding: 10px 20px;
+    border-radius: 4px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background-color 0.2s, color 0.2s;
+    white-space: nowrap;
+}
+
+.add-stop-btn:hover {
+    background-color: var(--primary-color);
+    color: var(--white);
+}
+
+.add-stop-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+#stopsContainer {
+    width: 100%;
+    flex-basis: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.stop-input-row {
+    display: flex;
+    align-items: flex-end;
+    gap: 6px;
+    width: 100%;
+}
+
+.stop-input-row .input-group {
+    flex: 1;
+    min-width: 0;
+}
+
+.remove-stop-btn {
+    background: transparent;
+    color: var(--error-color);
+    border: 1px solid var(--error-color);
+    border-radius: 4px;
+    padding: 6px 10px;
+    font-size: 14px;
+    cursor: pointer;
+    white-space: nowrap;
+    flex-shrink: 0;
+    transition: background-color 0.2s, color 0.2s;
+    margin-bottom: 0;
+    align-self: flex-end;
+    height: 40px;
+}
+
+.remove-stop-btn:hover {
+    background-color: var(--error-color);
+    color: var(--white);
+}
+
+/* Stop dwell time selector inside intermediate stop rows */
+.stop-dwell-group {
+    flex: 0 0 auto;
+    min-width: 110px;
+    max-width: 140px;
+}
+
+.stop-dwell-select {
+    width: 100%;
+    padding: 8px 6px;
+    border: 2px solid var(--border-color);
+    border-radius: 4px;
+    font-size: 13px;
+    background-color: var(--white);
+    color: var(--text-color);
+    cursor: pointer;
+}
+
+/* Destination weather badge in journey results */
+.journey-dest-weather {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-top: 4px;
+    padding: 4px 14px 0;
+}
+
+.journey-dest-weather img {
+    width: 24px;
+    height: 24px;
 }
 
 /* Map Container */
 .map-container {
     flex: 1;
-    position: relative;
     display: flex;
+    gap: 16px;
+    padding: 16px;
+    min-height: 0;
+    align-items: stretch;
+}
+
+/* Map area wrapper — holds the map and the weather overlay */
+.map-area {
+    flex: 1 1 auto;
+    position: relative;
+    height: calc(100vh - 140px);
+    min-height: 400px;
+    display: flex;
+    flex-direction: column;
 }
 
 #map {
-    flex: 1;
-    height: calc(100vh - 180px);
-    min-height: 500px;
+    flex: 1 1 auto;
+    height: 100%;
+    min-height: 400px;
     z-index: 1;
+    border-radius: 8px;
+    overflow: hidden;
 }
 
-.route-planner.collapsed~.map-container #map {
-    height: calc(100vh - 120px);
+.route-planner.collapsed~.map-container .map-area #map {
+    height: 100%;
 }
 
 .map-instructions {
@@ -395,68 +527,116 @@ body {
 
 /* Route Display Panel */
 .route-display {
-    position: absolute;
-    top: 20px;
-    right: 20px;
-    width: 320px;
-    min-width: 260px;
-    min-height: 160px;
-    max-width: min(96vw, 1200px);
-    max-height: calc(100% - 40px);
+    flex: 0 0 clamp(300px, 32vw, 440px);
+    width: clamp(300px, 32vw, 440px);
+    min-width: 300px;
+    height: calc(100vh - 140px);
+    min-height: 400px;
+    position: relative;
     background-color: var(--white);
     border-radius: 8px;
     box-shadow: 0 4px 12px var(--shadow);
-    padding: 20px;
+    padding: 0;
     overflow-y: auto;
-    resize: both;
-    z-index: 500;
 }
 
 .route-display h3 {
-    color: var(--primary-color);
-    margin-bottom: 15px;
-    font-size: 1.125em;
-    border-bottom: 2px solid var(--secondary-color);
-    padding-bottom: 10px;
-    cursor: move;
-    user-select: none;
-    touch-action: none;
-}
-
-body.route-panel-dragging {
-    user-select: none;
-}
-
-body.route-panel-resizing {
-    user-select: none;
-}
-
-.route-display-resizer {
-    position: absolute;
-    right: 0;
-    bottom: 0;
-    width: 26px;
-    height: 26px;
-    cursor: nwse-resize;
-    touch-action: none;
-    z-index: 2;
-    background: linear-gradient(135deg,
-            transparent 0 35%,
-            rgba(16, 35, 69, 0.25) 35% 45%,
-            transparent 45% 60%,
-            rgba(16, 35, 69, 0.35) 60% 70%,
-            transparent 70%);
-    border-bottom-right-radius: 8px;
+    color: var(--white);
+    margin: 0;
+    font-size: 1.05em;
+    font-weight: 700;
+    padding: 14px 18px;
+    background: var(--primary-color);
+    border-radius: 8px 8px 0 0;
+    border-bottom: 3px solid var(--secondary-color);
+    letter-spacing: 0.02em;
+    position: sticky;
+    top: 0;
+    z-index: 1;
 }
 
 .route-content {
     color: var(--text-color);
     line-height: 1.6;
     font-size: 1em;
+    padding: 14px;
 }
 
 .route-content p {
     margin-bottom: 10px;
+}
+
+.route-display-overlay {
+    position: absolute;
+    inset: 0;
+    background: var(--white);
+    border-radius: 8px;
+    z-index: 15;
+    display: none;
+    flex-direction: column;
+}
+
+.route-display-overlay.active {
+    display: flex;
+}
+
+.route-display.showing-departures>h3,
+.route-display.showing-departures>.route-content {
+    display: none;
+}
+
+.route-display-overlay-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 16px 18px;
+    border-bottom: 1px solid var(--border-light);
+}
+
+.route-display-overlay-title {
+    color: var(--primary-color);
+    font-weight: 700;
+    font-size: 1.02em;
+}
+
+.route-display-overlay-close {
+    background: none;
+    border: none;
+    color: var(--primary-color);
+    font-size: 26px;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.route-display-overlay-body {
+    padding: 14px 18px 18px;
+    overflow-y: auto;
+    flex: 1;
+}
+
+.departures-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.departures-item {
+    border: 1px solid var(--border-light);
+    border-radius: 8px;
+    padding: 10px 12px;
+    margin-bottom: 10px;
+    background: #fafafa;
+}
+
+.departures-item-route {
+    font-weight: 700;
+    color: var(--primary-color);
+}
+
+.departures-item-meta {
+    color: var(--text-dimmer);
+    font-size: 0.92em;
+    margin-top: 4px;
 }
 
 /* Modal Styles */
@@ -482,6 +662,8 @@ body.route-panel-resizing {
     border-radius: 8px;
     width: 90%;
     max-width: 500px;
+    max-height: 88vh;
+    overflow: hidden;
     box-shadow: 0 4px 20px var(--shadow);
 }
 
@@ -501,6 +683,38 @@ body.route-panel-resizing {
 
 .modal-body {
     padding: 25px;
+    max-height: calc(88vh - 80px);
+    overflow-y: auto;
+}
+
+.settings-section {
+    border: 1px solid var(--border-light);
+    border-radius: 8px;
+    padding: 10px 12px 2px;
+    margin-bottom: 14px;
+    background: #fafafa;
+}
+
+.settings-section summary {
+    cursor: pointer;
+    font-weight: 700;
+    color: var(--primary-color);
+    margin-bottom: 10px;
+    list-style: none;
+}
+
+.settings-section summary::-webkit-details-marker {
+    display: none;
+}
+
+.settings-section summary::after {
+    content: '▾';
+    float: right;
+    color: var(--text-muted);
+}
+
+.settings-section:not([open]) summary::after {
+    content: '▸';
 }
 
 .setting-group {
@@ -618,11 +832,12 @@ body.high-contrast {
     --journey-leg-border: #000000;
     --journey-walk-border: #444444;
     --journey-walk-label-color: #000000;
+    --journey-leg-hover-bg: #c0c0c0;
+    --journey-leg-highlight-bg: #ffff00;
 
     /* Map overlays */
     --map-instructions-bg: rgba(0, 0, 0, 0.9);
     --map-zoom-hint-bg: rgba(0, 0, 0, 0.9);
-    --map-click-hint-bg: rgba(0, 0, 0, 0.9);
 
     /* Button hover / darker accent */
     --accent-color-hover: #005500;
@@ -637,6 +852,10 @@ body.high-contrast {
 body.high-contrast .input-group input,
 body.high-contrast .input-group select {
     border-width: 3px;
+}
+
+body.high-contrast .input-group input.map-input-picking {
+    box-shadow: 0 0 0 3px var(--primary-color);
 }
 
 /* Notification Toast */
@@ -663,12 +882,12 @@ body.high-contrast .input-group select {
     pointer-events: auto;
 }
 
-/* Weather Widget Styles */
+/* Weather Widget Styles — positioned inside the .map-area wrapper */
 .weather-widget {
-    position: fixed;
-    bottom: 5px;
+    position: absolute;
+    bottom: 10px;
     left: 10px;
-    width: 130px;
+    width: 200px;
     background-color: var(--white);
     border-radius: 8px;
     box-shadow: 0 4px 12px var(--shadow);
@@ -703,6 +922,17 @@ body.high-contrast .input-group select {
 .weather-temp {
     display: flex;
     flex-direction: column;
+}
+
+.weather-city {
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--primary-color);
+    margin-bottom: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 120px;
 }
 
 .temp-value {
@@ -834,25 +1064,20 @@ body.high-contrast .input-group select {
         font-size: 15px;
     }
 
+    .map-container {
+        gap: 12px;
+        padding: 12px;
+    }
+
     .route-display {
-        width: calc(100% - 40px);
-        max-height: 300px;
-    }
-
-    #map {
-        height: calc(100vh - 260px);
-    }
-
-    .route-planner.collapsed~.map-container #map {
-        height: calc(100vh - 140px);
+        flex-basis: 300px;
+        width: 300px;
+        min-width: 260px;
     }
 
     .weather-widget {
-        width: 120px;
+        width: 185px;
         padding: 8px;
-        bottom: 12px;
-        right: 12px;
-        left: auto;
     }
 
     .weather-icon {
@@ -894,18 +1119,14 @@ body.high-contrast .input-group select {
         font-size: 14px;
     }
 
-    .route-display {
-        top: 10px;
-        right: 10px;
-        width: calc(100% - 20px);
+    .map-container {
+        gap: 10px;
+        padding: 10px;
     }
 
     .weather-widget {
-        width: 108px;
+        width: 170px;
         padding: 6px;
-        bottom: 110px;
-        right: 10px;
-        left: auto;
     }
 
     .weather-icon {
@@ -914,6 +1135,29 @@ body.high-contrast .input-group select {
     }
 
 
+}
+
+@media (orientation: portrait) {
+    .map-container {
+        flex-direction: column;
+    }
+
+    .route-display {
+        flex: 0 0 auto;
+        width: 100%;
+        min-width: 0;
+        height: auto;
+        max-height: 38vh;
+    }
+
+    .map-area {
+        height: auto;
+        min-height: 420px;
+    }
+
+    #map {
+        min-height: 420px;
+    }
 }
 
 /* Suggestions dropdown styles */
@@ -981,6 +1225,20 @@ body.high-contrast .input-group select {
     #toSuggestions {
         max-height: 200px;
     }
+}
+
+/* Dynamic stop suggestions dropdowns (id="stopSuggestionsN") */
+[id^="stopSuggestions"] {
+    display: none;
+    position: absolute;
+    background: var(--white);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    box-shadow: 0 6px 18px rgba(15, 23, 42, 0.12);
+    z-index: 99999;
+    max-height: 260px;
+    overflow: auto;
+    padding: 6px 0;
 }
 
 /* ── Bus stop map markers ──────────────────────────────────────────────── */
@@ -1060,22 +1318,7 @@ body.high-contrast .input-group select {
     margin-left: 10px;
 }
 
-/* Map click hint – shows whether the next click sets start, end, or resets start */
-.map-click-hint {
-    background: var(--map-click-hint-bg);
-    color: var(--white);
-    padding: 7px 12px;
-    border-radius: 5px;
-    font-size: 13px;
-    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
-    pointer-events: none;
-    white-space: nowrap;
-    margin-bottom: 10px;
-    margin-right: 10px;
-}
-
-body.hide-map-hints .bus-stop-zoom-hint,
-body.hide-map-hints .map-click-hint {
+body.hide-map-hints .bus-stop-zoom-hint {
     display: none !important;
 }
 
@@ -1206,31 +1449,54 @@ body.map-night-mode #map .leaflet-control-attribution a {
 .journey-list {
     display: flex;
     flex-direction: column;
-    gap: 12px;
+    gap: 10px;
 }
 
 /* Individual journey card */
 .journey-card {
-    padding: 16px;
+    padding: 0;
     background-color: var(--white);
     border: 1px solid var(--border-color);
+    border-top: 3px solid var(--journey-leg-border);
     border-radius: 8px;
-    box-shadow: 0 2px 4px var(--shadow);
-    transition: box-shadow 0.2s;
+    box-shadow: 0 2px 6px var(--shadow);
+    transition: box-shadow 0.2s, border-top-color 0.2s;
+    overflow: hidden;
 }
 
 .journey-card:hover {
-    box-shadow: 0 4px 8px var(--shadow);
+    box-shadow: 0 4px 12px var(--shadow);
+    border-top-color: var(--secondary-color);
 }
 
-/* Card header: origin/destination summary + departure/arrival times */
+/* Card header: clickable collapse/expand toggle */
 .journey-card-header {
     display: flex;
     justify-content: space-between;
     align-items: flex-start;
-    margin-bottom: 12px;
-    padding-bottom: 12px;
+    padding: 14px 16px 12px;
     border-bottom: 1px solid var(--border-light);
+    cursor: pointer;
+    user-select: none;
+    background: linear-gradient(135deg, rgba(46, 80, 144, 0.04), transparent 60%);
+}
+
+.journey-card-header:hover {
+    background: linear-gradient(135deg, rgba(46, 80, 144, 0.08), rgba(46, 80, 144, 0.02) 60%);
+}
+
+/* Summary section with mode sequence */
+.journey-summary-section {
+    flex: 1;
+}
+
+/* Mode sequence bar visible in both collapsed and expanded states */
+.journey-mode-sequence {
+    font-size: 1.2em;
+    margin-bottom: 0.5em;
+    letter-spacing: 0.05em;
+    color: var(--journey-stop-color);
+    font-weight: 600;
 }
 
 .journey-summary {
@@ -1238,16 +1504,26 @@ body.map-night-mode #map .leaflet-control-attribution a {
 }
 
 .journey-stop-name {
-    font-size: 1.08em;
+    font-size: 1em;
     color: var(--journey-stop-color);
     font-weight: 700;
-    line-height: 1.45;
+    line-height: 1.4;
 }
 
 .journey-stop-arrow {
-    font-size: 1em;
+    font-size: 0.9em;
     color: var(--text-muted);
-    margin-top: 0.3em;
+    margin: 0.2em 0;
+}
+
+/* Expand/collapse toggle indicator */
+.journey-toggle-icon {
+    font-size: 1.2em;
+    color: var(--journey-stop-color);
+    margin-left: 8px;
+    min-width: 20px;
+    text-align: center;
+    transition: transform 0.2s;
 }
 
 /* Right-hand time column */
@@ -1291,19 +1567,142 @@ body.map-night-mode #map .leaflet-control-attribution a {
 }
 
 .journey-departs-time {
-    font-size: 1.5em;
+    font-size: 1.35em;
     font-weight: 800;
-    color: var(--journey-departs-color);
-    margin-top: 0.1em;
-    line-height: 1.2;
+    color: var(--white);
+    background: var(--journey-departs-color);
+    padding: 3px 10px;
+    border-radius: 5px;
+    margin-top: 0.2em;
+    line-height: 1.35;
+    display: inline-block;
+    letter-spacing: 0.02em;
 }
 
 .journey-arrives-time {
-    font-size: 1.5em;
+    font-size: 1.35em;
     font-weight: 800;
-    color: var(--journey-arrives-color);
-    margin-top: 0.1em;
-    line-height: 1.2;
+    color: var(--white);
+    background: var(--journey-arrives-color);
+    padding: 3px 10px;
+    border-radius: 5px;
+    margin-top: 0.2em;
+    line-height: 1.35;
+    display: inline-block;
+    letter-spacing: 0.02em;
+}
+
+/* Journey duration badge */
+.journey-duration-badge {
+    display: inline-block;
+    background: var(--background-color);
+    color: var(--text-muted);
+    font-size: 0.82em;
+    font-weight: 700;
+    padding: 2px 9px;
+    border-radius: 10px;
+    border: 1px solid var(--border-color);
+    margin-top: 8px;
+    white-space: nowrap;
+    letter-spacing: 0.02em;
+}
+
+/* Late-arrival warning badge — shown when an arrive-by journey arrives after the target */
+.journey-late-warning {
+    display: inline-block;
+    background: #f39c12;
+    color: #fff;
+    font-size: 0.72em;
+    font-weight: 700;
+    padding: 2px 6px;
+    border-radius: 10px;
+    border: 1px solid #d68910;
+    margin-top: 4px;
+    white-space: normal;
+    word-break: break-word;
+    letter-spacing: 0.02em;
+    max-width: 100%;
+}
+
+body.high-contrast .journey-late-warning {
+    background: #000;
+    color: #fff;
+    border-color: #fff;
+}
+
+/* Already-departed warning badge — shown when a journey departs before the current time */
+.journey-departed-warning {
+    display: inline-block;
+    background: #e74c3c;
+    color: #fff;
+    font-size: 0.72em;
+    font-weight: 700;
+    padding: 2px 6px;
+    border-radius: 10px;
+    border: 1px solid #c0392b;
+    margin-top: 4px;
+    white-space: normal;
+    word-break: break-word;
+    letter-spacing: 0.02em;
+    max-width: 100%;
+}
+
+body.high-contrast .journey-departed-warning {
+    background: #000;
+    color: #fff;
+    border-color: #fff;
+}
+
+/* Use-current-location button inside input wrappers */
+.location-input-wrapper {
+    display: flex;
+    align-items: stretch;
+    gap: 0;
+}
+
+.location-input-wrapper input {
+    flex: 1;
+    min-width: 0;
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+}
+
+.use-location-btn {
+    flex-shrink: 0;
+    background: var(--primary-color);
+    color: var(--white);
+    border: 2px solid var(--primary-color);
+    border-left: none;
+    border-radius: 0 4px 4px 0;
+    padding: 0 10px;
+    font-size: 16px;
+    cursor: pointer;
+    transition: background-color 0.2s, opacity 0.2s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.use-location-btn:hover {
+    background: var(--accent-color);
+    border-color: var(--accent-color);
+}
+
+.use-location-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* Journey results count header */
+.journey-results-header {
+    font-size: 0.88em;
+    font-weight: 700;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-bottom: 10px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border-light);
 }
 
 /* Legs section */
@@ -1311,6 +1710,7 @@ body.map-night-mode #map .leaflet-control-attribution a {
     margin-top: 0;
     font-size: 1em;
     color: var(--text-dimmer);
+    padding: 12px 16px 14px;
 }
 
 .journey-legs-list {
@@ -1328,10 +1728,57 @@ body.map-night-mode #map .leaflet-control-attribution a {
     background-color: var(--journey-leg-bg);
     border-radius: 6px;
     border-left: 3px solid var(--journey-leg-border);
+    cursor: pointer;
+    transition: background-color 0.2s;
+}
+
+/* Hover / active highlight: widens the associated map polyline via JS */
+.journey-leg:hover {
+    background-color: var(--journey-leg-hover-bg);
+}
+
+/* Flash animation played when the user clicks a map polyline */
+.journey-leg--highlighted {
+    animation: leg-highlight-flash 1.5s ease-out;
+}
+
+@keyframes leg-highlight-flash {
+    0% {
+        background-color: var(--journey-leg-highlight-bg);
+    }
+
+    100% {
+        background-color: var(--journey-leg-bg);
+    }
+}
+
+/* Leg header with route info and info button */
+.journey-leg-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.4em;
+}
+
+/* Info button on each leg */
+.journey-leg-info-btn {
+    background: none;
+    border: none;
+    font-size: 1.1em;
+    cursor: pointer;
+    padding: 4px 8px;
+    margin-left: 8px;
+    border-radius: 4px;
+    transition: background-color 0.2s;
+}
+
+.journey-leg-info-btn:hover {
+    background-color: rgba(46, 80, 144, 0.1);
 }
 
 .journey-leg--walk {
     border-left-color: var(--journey-walk-border);
+    background-color: var(--background-color);
 }
 
 .journey-leg-walk-label {
@@ -1356,18 +1803,25 @@ body.map-night-mode #map .leaflet-control-attribution a {
 }
 
 .journey-leg-route strong {
-    font-size: 1.22em;
-    color: var(--journey-stop-color);
+    font-size: 1.1em;
+    color: var(--white);
+    background: var(--journey-leg-border);
+    padding: 2px 8px;
+    border-radius: 4px;
+    display: inline-block;
+    letter-spacing: 0.01em;
 }
 
 .journey-leg-stops {
     color: var(--text-muted);
-    font-size: 1em;
+    font-size: 0.95em;
     line-height: 1.5;
+    margin-top: 0.3em;
 }
 
 .journey-leg-times {
-    margin-top: 0.35em;
+    margin-top: 0.4em;
+    font-size: 0.95em;
 }
 
 .journey-leg-depart {
@@ -1402,4 +1856,219 @@ body.map-night-mode #map .leaflet-control-attribution a {
 .popup-arrive-time {
     color: var(--journey-arrives-color);
     font-weight: 600;
+}
+
+/* ── Leg Details Modal ────────────────────────────────────────────────────── */
+
+/* Modal backdrop overlay */
+.leg-modal-backdrop {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10000;
+}
+
+/* Modal container */
+.leg-modal {
+    background-color: var(--white);
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+    max-width: 500px;
+    width: 90%;
+    max-height: 80vh;
+    overflow-y: auto;
+    animation: modalSlideIn 0.3s ease-out;
+}
+
+@keyframes modalSlideIn {
+    from {
+        opacity: 0;
+        transform: translateY(-20px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* Modal header */
+.leg-modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 16px;
+    border-bottom: 1px solid var(--border-light);
+    background-color: var(--white);
+    position: sticky;
+    top: 0;
+}
+
+.leg-modal-header h3 {
+    margin: 0;
+    font-size: 1.3em;
+    color: var(--journey-stop-color);
+}
+
+/* Close button */
+.leg-modal-close {
+    background: none;
+    border: none;
+    font-size: 1.9em;
+    line-height: 1;
+    font-weight: 400;
+    cursor: pointer;
+    color: var(--text-muted);
+    padding: 0 4px;
+    width: auto;
+    height: auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 0;
+    transition: color 0.2s;
+}
+
+.leg-modal-close:hover {
+    color: var(--text-color);
+}
+
+/* Modal body */
+.leg-modal-body {
+    padding: 16px;
+}
+
+/* Modal section (for each info block) */
+.leg-modal-section {
+    margin-bottom: 16px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border-light);
+}
+
+.leg-modal-section:last-of-type {
+    border-bottom: none;
+}
+
+.leg-modal-section strong {
+    display: block;
+    color: var(--journey-stop-color);
+    font-size: 0.95em;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 6px;
+}
+
+.leg-modal-section>div:not(strong) {
+    color: var(--text-color);
+    font-size: 1em;
+    line-height: 1.5;
+}
+
+.leg-modal-journey-fromto {
+    text-align: center;
+}
+
+.leg-modal-stop-name {
+    text-align: center;
+}
+
+.leg-modal-journey-arrow {
+    text-align: center;
+    color: #999;
+    margin: 4px 0;
+}
+
+.leg-modal-intermediate-wrap {
+    margin: 0;
+}
+
+.leg-modal-load-stops-btn {
+    margin-top: 6px;
+    background-color: var(--journey-stop-color);
+    color: var(--white);
+    border: none;
+    border-radius: 6px;
+    padding: 8px 12px;
+    cursor: pointer;
+    font-weight: 600;
+}
+
+.leg-modal-inline-load-wrap {
+    text-align: center;
+}
+
+.leg-modal-load-stops-btn:disabled {
+    opacity: 0.75;
+    cursor: not-allowed;
+}
+
+.leg-modal-load-status {
+    margin-top: 8px;
+    color: var(--text-muted);
+    font-size: 0.92em;
+}
+
+.leg-modal-stops-container {
+    margin-top: 10px;
+}
+
+.leg-modal-stop-list {
+    margin: 0;
+    padding-left: 18px;
+}
+
+.leg-modal-stop-item {
+    margin-bottom: 8px;
+}
+
+.leg-modal-stop-item-name {
+    text-align: center;
+    font-weight: 600;
+}
+
+.leg-modal-stop-item-times {
+    text-align: center;
+    font-size: 0.92em;
+}
+
+.leg-modal-time-depart {
+    color: var(--journey-departs-color);
+    font-weight: 600;
+}
+
+.leg-modal-time-arrive {
+    color: var(--journey-arrives-color);
+    font-weight: 600;
+}
+
+.leg-modal-time-sep {
+    color: var(--text-muted);
+}
+
+/* Info message */
+.leg-modal-info {
+    background-color: var(--background-color);
+    padding: 12px;
+    border-radius: 6px;
+    font-size: 0.9em;
+    color: var(--text-muted);
+    margin-top: 12px;
+}
+
+/* Responsive adjustments */
+@media (max-width: 480px) {
+    .leg-modal {
+        width: 95%;
+        max-height: 90vh;
+    }
+
+    .leg-modal-header h3 {
+        font-size: 1.1em;
+    }
 }

@@ -37,7 +37,8 @@ query PlanJourney(
   $numItineraries: Int!,
   $walkSpeed: Float!,
   $transferPenalty: Int!,
-  $arriveBy: Boolean!
+  $arriveBy: Boolean!,
+  $searchWindow: Long
 ) {
   plan(
     from: { lat: $fromLat, lon: $fromLon }
@@ -45,6 +46,7 @@ query PlanJourney(
     date: $date
     time: $time
     numItineraries: $numItineraries
+    searchWindow: $searchWindow
     transportModes: [{ mode: TRANSIT }, { mode: WALK }]
     walkSpeed: $walkSpeed
     transferPenalty: $transferPenalty
@@ -233,7 +235,8 @@ def _parse_legs(otp_legs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             )
 
             try:
-                direction_id = int((trip.get("directionId") or otp_leg.get("directionId")) or 0)
+                direction_id = int(
+                    (trip.get("directionId") or otp_leg.get("directionId")) or 0)
             except (TypeError, ValueError):
                 direction_id = 0
             direction = "inbound" if direction_id == 1 else "outbound"
@@ -252,8 +255,19 @@ def _parse_legs(otp_legs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             leg_geom = otp_leg.get("legGeometry") or {}
             otp_waypoints = _decode_polyline(leg_geom.get("points") or "")
 
+            if mode == "RAIL":
+                mode_label = "rail"
+            elif mode == "TRAM":
+                mode_label = "tram"
+            elif mode == "SUBWAY":
+                mode_label = "subway"
+            elif mode == "FERRY":
+                mode_label = "ferry"
+            else:
+                mode_label = "bus"
+
             transit_leg: Dict[str, Any] = {
-                "mode": "bus",
+                "mode": mode_label,
                 "route_id": route_id,
                 "route_name": route_name,
                 "operator": operator,
@@ -281,13 +295,17 @@ def _itineraries_to_journeys(itineraries: List[Dict[str, Any]]) -> List[Dict[str
         if not legs:
             continue
 
-        bus_count = sum(1 for leg in legs if leg.get("mode") == "bus")
-        if bus_count == 0:
+        # Count all transit legs (bus, rail, tram, ferry, etc.) — not just bus —
+        # so that rail-only or tram-only itineraries are not incorrectly filtered.
+        transit_legs = [leg for leg in legs if (
+            leg.get("mode") or "").lower() != "walk"]
+        if not transit_legs:
             continue  # skip walk-only itineraries
 
+        transit_count = len(transit_legs)
         journey_type = (
-            "direct" if bus_count == 1
-            else "transfer" if bus_count == 2
+            "direct" if transit_count == 1
+            else "transfer" if transit_count == 2
             else "multi-transfer"
         )
         journeys.append({"type": journey_type, "legs": legs})
@@ -359,10 +377,18 @@ async def plan_journey(
     Returns a list of journey dicts compatible with the application's
     existing response format (same structure as the previous custom router).
 
+    When ``arrive_by=True`` returns fewer than 3 journeys a supplementary
+    search is performed for itineraries that arrive up to 30 minutes after
+    the requested arrival time.  Those journeys are tagged with
+    ``arrives_late=True`` and ``late_by_mins=<N>`` so the frontend can
+    display an appropriate warning.
+
     Raises:
         httpx.ConnectError / httpx.TimeoutException  — OTP unreachable
         httpx.HTTPStatusError                        — OTP HTTP error
     """
+    from datetime import datetime as _datetime, timedelta as _timedelta
+
     graphql_url = f"{settings.otp_url}/otp/gtfs/v1"
     variables = {
         "fromLat": origin_lat,
@@ -375,10 +401,14 @@ async def plan_journey(
         "walkSpeed": _walk_speed_mps(walking_speed),
         "transferPenalty": _transfer_penalty(preference),
         "arriveBy": arrive_by,
+        "searchWindow": 3600,  # 1-hour window so OTP finds more alternatives
     }
 
     async with httpx.AsyncClient(timeout=30.0) as client:
         # --- OTP v2 GraphQL ---
+        # use_v2 tracks which transport succeeded so the late-journey supplement
+        # can reuse the same endpoint rather than redundantly retrying the other.
+        use_v2 = True
         try:
             resp = await client.post(
                 graphql_url,
@@ -392,13 +422,14 @@ async def plan_journey(
                 logger.warning("OTP v2 GraphQL errors: %s", data["errors"])
 
             plan = (data.get("data") or {}).get("plan") or {}
-            return _itineraries_to_journeys(plan.get("itineraries") or [])
+            journeys = _itineraries_to_journeys(plan.get("itineraries") or [])
 
         except (httpx.ConnectError, httpx.TimeoutException) as exc:
+            use_v2 = False
             logger.warning(
                 "OTP v2 endpoint unreachable (%s), falling back to OTP v1 REST.", exc
             )
-            return await _plan_via_v1(
+            journeys = await _plan_via_v1(
                 client,
                 origin_lat, origin_lon,
                 dest_lat, dest_lon,
@@ -406,3 +437,73 @@ async def plan_journey(
                 num_itineraries, preference, walking_speed,
                 arrive_by=arrive_by,
             )
+
+        # --- Supplement with "just late" journeys when arrive_by yields few results ---
+        # If the arrive-by search found fewer than 3 itineraries, also search for
+        # journeys arriving up to 30 minutes after the requested arrival time and
+        # tag them so the frontend can warn the user.
+        if arrive_by and len(journeys) < 3:
+            late_threshold_mins = 30
+            target_dt = _datetime.combine(dep_date, dep_time)
+            late_dt = target_dt + _timedelta(minutes=late_threshold_mins)
+            late_time = late_dt.time()
+            late_date = late_dt.date()
+
+            try:
+                if use_v2:
+                    late_vars = {
+                        **variables,
+                        "date": late_date.strftime("%Y-%m-%d"),
+                        "time": late_time.strftime("%H:%M:%S"),
+                    }
+                    resp2 = await client.post(
+                        graphql_url,
+                        json={"query": _PLAN_QUERY, "variables": late_vars},
+                    )
+                    resp2.raise_for_status()
+                    data2 = resp2.json()
+                    plan2 = (data2.get("data") or {}).get("plan") or {}
+                    late_candidates = _itineraries_to_journeys(
+                        plan2.get("itineraries") or [])
+                else:
+                    late_candidates = await _plan_via_v1(
+                        client,
+                        origin_lat, origin_lon,
+                        dest_lat, dest_lon,
+                        late_time, late_date,
+                        num_itineraries, preference, walking_speed,
+                        arrive_by=True,
+                    )
+
+                target_total_mins = dep_time.hour * 60 + dep_time.minute
+                next_day = late_dt.date() > dep_date
+
+                for j in late_candidates:
+                    legs = j.get("legs") or []
+                    last_leg = legs[-1] if legs else None
+                    if not last_leg:
+                        continue
+                    arr_str = last_leg.get("arrival_time", "")  # "HH:MM:SS"
+                    if not arr_str:
+                        continue
+                    parts = arr_str.split(":")
+                    try:
+                        arr_mins = int(parts[0]) * 60 + int(parts[1])
+                    except (IndexError, ValueError):
+                        continue
+
+                    late_by = arr_mins - target_total_mins
+                    # Handle midnight wraparound: arrival next day but target was same-day
+                    if late_by < 0 and next_day:
+                        late_by += 24 * 60
+
+                    if 0 < late_by <= late_threshold_mins:
+                        j["arrives_late"] = True
+                        j["late_by_mins"] = late_by
+                        journeys.append(j)
+
+            except (httpx.ConnectError, httpx.TimeoutException, httpx.HTTPStatusError) as exc:
+                logger.warning(
+                    "Late-journey supplement search failed: %s", exc)
+
+        return journeys

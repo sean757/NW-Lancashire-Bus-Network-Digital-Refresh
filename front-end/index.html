@@ -23,7 +23,6 @@
         </div>
         <ul class="sidebar-menu">
             <li><a href="#" class="active">Home</a></li>
-            <li><a href="#" id="accessibilityLink">Accessibility Settings</a></li>
             <li><a href="#" id="languageLink">Languages</a></li>
             <li><a href="#" id="settingsLink">Settings</a></li>
             <li><a href="#" id="reportBugLink">Report Bug</a></li>
@@ -50,11 +49,26 @@
                 <div class="planner-row">
                     <div class="input-group">
                         <label for="startPoint">Start Point:</label>
-                        <input type="text" id="startPoint" placeholder="Enter starting location">
+                        <div class="location-input-wrapper">
+                            <input type="text" id="startPoint" placeholder="Enter starting location">
+                            <button type="button" class="use-location-btn" id="useLocationStart"
+                                title="Use current location"
+                                aria-label="Use current location as start point">📍</button>
+                        </div>
                     </div>
+                    <!-- Intermediate stops (up to 3, added dynamically) -->
+                    <div id="stopsContainer"></div>
                     <div class="input-group">
                         <label for="endPoint">End Point:</label>
-                        <input type="text" id="endPoint" placeholder="Enter destination">
+                        <div class="location-input-wrapper">
+                            <input type="text" id="endPoint" placeholder="Enter destination">
+                            <button type="button" class="use-location-btn" id="useLocationEnd"
+                                title="Use current location" aria-label="Use current location as end point">📍</button>
+                        </div>
+                    </div>
+                    <div class="stops-add-row">
+                        <button type="button" class="add-stop-btn" id="addStopBtn" aria-label="Add intermediate stop">+
+                            Add Stop</button>
                     </div>
                 </div>
 
@@ -97,8 +111,6 @@
 
         <!-- Map and Route Display -->
         <div class="map-container">
-            <div id="map"></div>
-
             <!-- Route Display Panel -->
             <div class="route-display" id="routeDisplay">
                 <h3>Route Information</h3>
@@ -106,35 +118,13 @@
                     <p>Enter your start and end points to plan your journey.</p>
                 </div>
             </div>
-        </div>
-    </div>
 
-    <!-- Accessibility Settings Modal -->
-    <div class="modal" id="accessibilityModal">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h2>Accessibility Settings</h2>
-                <button class="close-btn" id="closeModal" aria-label="Close accessibility settings">&times;</button>
-            </div>
-            <div class="modal-body">
-                <div class="setting-group">
-                    <label for="fontSize">Font Size:</label>
-                    <select id="fontSize">
-                        <option value="small">Small</option>
-                        <option value="medium" selected>Medium</option>
-                        <option value="large">Large</option>
-                        <option value="extra-large">Extra Large</option>
-                    </select>
+            <div class="map-area">
+                <div id="map"></div>
+                <!-- Weather Widget (inside map area) -->
+                <div class="weather-widget" id="weatherWidget">
+                    <div class="weather-loading">Loading weather...</div>
                 </div>
-
-                <div class="setting-group">
-                    <label for="highContrast">High Contrast Mode:</label>
-                    <input type="checkbox" id="highContrast">
-                </div>
-
-
-
-                <button class="save-settings-btn" id="saveSettings">Save Settings</button>
             </div>
         </div>
     </div>
@@ -194,37 +184,67 @@
                 <button class="close-btn" id="closeSettingsModal" aria-label="Close settings">&times;</button>
             </div>
             <div class="modal-body">
-                <div class="setting-group settings-checkbox-row">
-                    <label for="settingsShowWeather">Show weather icon</label>
-                    <input type="checkbox" id="settingsShowWeather" checked>
-                </div>
+                <details class="settings-section" open>
+                    <summary id="settingsSectionMap">Map Settings</summary>
 
-                <div class="setting-group settings-checkbox-row">
-                    <label for="settingsShowMapHints">Show map helper pop-ups</label>
-                    <input type="checkbox" id="settingsShowMapHints" checked>
-                </div>
+                    <div class="setting-group settings-checkbox-row">
+                        <label for="settingsShowWeather">Show weather icon</label>
+                        <input type="checkbox" id="settingsShowWeather" checked>
+                    </div>
 
-                <div class="setting-group settings-checkbox-row">
-                    <label for="settingsDarkMap">Dark mode map tint</label>
-                    <input type="checkbox" id="settingsDarkMap">
-                </div>
+                    <div class="setting-group settings-checkbox-row">
+                        <label for="settingsShowMapHints">Show map helper pop-ups</label>
+                        <input type="checkbox" id="settingsShowMapHints" checked>
+                    </div>
 
-                <div class="setting-group settings-checkbox-row">
-                    <label for="settingsDisableNotifications">Disable notification messages</label>
-                    <input type="checkbox" id="settingsDisableNotifications">
-                </div>
+                    <div class="setting-group settings-checkbox-row">
+                        <label for="settingsDarkMap">Dark mode map tint</label>
+                        <input type="checkbox" id="settingsDarkMap">
+                    </div>
+
+                    <div class="setting-group settings-checkbox-row">
+                        <label for="settingsShowLiveBuses">Show live bus locations</label>
+                        <input type="checkbox" id="settingsShowLiveBuses" checked>
+                    </div>
+
+                    <div class="setting-group settings-checkbox-row">
+                        <label for="settingsShowBusStops">Show bus stops</label>
+                        <input type="checkbox" id="settingsShowBusStops" checked>
+                    </div>
+                </details>
+
+                <details class="settings-section" open>
+                    <summary id="settingsSectionNotifications">Notification Settings</summary>
+
+                    <div class="setting-group settings-checkbox-row">
+                        <label for="settingsDisableNotifications">Disable notification messages</label>
+                        <input type="checkbox" id="settingsDisableNotifications">
+                    </div>
+                </details>
+
+                <details class="settings-section" open>
+                    <summary id="settingsSectionAccessibility">Accessibility Settings</summary>
+
+                    <div class="setting-group">
+                        <label for="fontSize">Font Size:</label>
+                        <select id="fontSize">
+                            <option value="small">Small</option>
+                            <option value="medium" selected>Medium</option>
+                            <option value="large">Large</option>
+                            <option value="extra-large">Extra Large</option>
+                        </select>
+                    </div>
+
+                    <div class="setting-group settings-checkbox-row">
+                        <label for="highContrast">High Contrast Mode:</label>
+                        <input type="checkbox" id="highContrast">
+                    </div>
+                </details>
 
                 <button class="save-settings-btn" id="saveUiSettings">Save Settings</button>
             </div>
         </div>
     </div>
-
-    <!-- Weather Widget -->
-    <div class="weather-widget" id="weatherWidget">
-        <div class="weather-loading">Loading weather...</div>
-    </div>
-
-
 
     <!-- Notification Toast -->
     <div class="notification-toast" id="notificationToast" role="status" aria-live="polite"></div>

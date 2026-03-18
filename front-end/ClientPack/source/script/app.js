@@ -27,6 +27,69 @@ let selectedEndItem = null;
 let pendingStartItem = null;
 let pendingEndItem = null;
 
+// Intermediate stops state (up to MAX_STOPS entries)
+const MAX_STOPS = 3;
+let stopItems = [];        // array of selected location items (same shape as selectedStartItem)
+let stopInputTimers = [];  // debounce timers for each stop input
+let stopDwellTimes = [];   // dwell time (minutes) for each intermediate stop
+let viaMarkers = [];       // Leaflet markers shown on the map for each intermediate stop input
+
+// Maps each leg object → its Leaflet polyline layer, rebuilt by drawJourneyOnMap()
+let legToPolylineMap = new Map();
+
+// Tracks which location input box is awaiting a map click:
+// null | 'from' | 'to' | { type: 'stop', idx: number }
+let activeMapInput = null;
+
+/**
+ * Set or clear the active map-input state and update the visual highlight class
+ * on the relevant input so it stays visually selected even while dragging the map.
+ */
+function setActiveMapInput(value) {
+    const t = translations[currentLang] || translations.en;
+
+    // Remove picking highlight and restore original placeholders on all inputs
+    [fromInput, toInput].forEach(inp => {
+        if (!inp) return;
+        inp.classList.remove('map-input-picking');
+        if (inp._originalPlaceholder !== undefined) {
+            inp.placeholder = inp._originalPlaceholder;
+            delete inp._originalPlaceholder;
+        }
+    });
+    document.querySelectorAll('.stop-point-input').forEach(inp => {
+        inp.classList.remove('map-input-picking');
+        if (inp._originalPlaceholder !== undefined) {
+            inp.placeholder = inp._originalPlaceholder;
+            delete inp._originalPlaceholder;
+        }
+    });
+
+    activeMapInput = value;
+
+    const mapPickPlaceholder = t.mapPickPlaceholder || 'Click on the map or start typing a stop name to set this location';
+
+    // Apply picking highlight and change placeholder on the newly active input
+    if (value === 'from') {
+        fromInput.classList.add('map-input-picking');
+        fromInput._originalPlaceholder = fromInput.placeholder;
+        fromInput.placeholder = mapPickPlaceholder;
+    } else if (value === 'to') {
+        toInput.classList.add('map-input-picking');
+        toInput._originalPlaceholder = toInput.placeholder;
+        toInput.placeholder = mapPickPlaceholder;
+    } else if (value && value.type === 'stop') {
+        const inp = document.querySelector(`.stop-point-input[data-idx="${value.idx}"]`);
+        if (inp) {
+            inp.classList.add('map-input-picking');
+            inp._originalPlaceholder = inp.placeholder;
+            inp.placeholder = mapPickPlaceholder;
+        }
+    }
+
+    updateMapClickHint();
+}
+
 // Timers for debounced exact-match lookup
 let fromInputTimer = null;
 let toInputTimer = null;
@@ -138,7 +201,29 @@ function addEndMarker(item) {
     map.panTo(coords);
 }
 
-// Accessible notification function (UI helper)
+function addViaMarker(item, idx) {
+    if (!item || !map) return;
+    const coords = extractLatLng(item);
+    if (!coords) return;
+    if (viaMarkers[idx]) {
+        map.removeLayer(viaMarkers[idx]);
+        viaMarkers[idx] = null;
+    }
+    viaMarkers[idx] = L.circleMarker(coords, {
+        radius: 8,
+        fillColor: '#F39C12',
+        color: '#ffffff',
+        weight: 2,
+        fillOpacity: 1
+    }).addTo(map).bindPopup(getLabelFromItem(item));
+}
+
+function removeViaMarker(idx) {
+    if (viaMarkers[idx] && map) {
+        map.removeLayer(viaMarkers[idx]);
+        viaMarkers[idx] = null;
+    }
+}
 function showNotification(message) {
     if (uiSettings.disableNotifications) return;
     const toast = document.getElementById('notificationToast');
@@ -155,21 +240,8 @@ function showNotification(message) {
  * Called after each map click and after adding/clearing markers.
  */
 function updateMapClickHint() {
-    const hint = document.getElementById('mapClickHint');
-    if (!hint) return;
-    if (!uiSettings.showMapHints) {
-        hint.style.display = 'none';
-        return;
-    }
-    hint.style.display = 'block';
-    const t = translations[currentLang] || translations.en;
-    if (!selectedStartItem && !selectedEndItem) {
-        hint.textContent = t.clickHintStart;
-    } else if (selectedStartItem && !selectedEndItem) {
-        hint.textContent = t.clickHintEnd;
-    } else {
-        hint.textContent = t.clickHintReset;
-    }
+    // The bottom-right map click hint has been removed.
+    // This function is kept as a no-op so existing callers don't break.
 }
 
 // Map / state variables
@@ -193,6 +265,38 @@ const LIVE_BUS_REFRESH_INTERVAL_MS = 30000; // 30 seconds
 // DOM selectors
 let fromInput = document.getElementById('startPoint');
 let toInput = document.getElementById('endPoint');
+
+// --- Use current location buttons ---
+function useCurrentLocation(isStart) {
+    if (!navigator.geolocation) {
+        showNotification('Geolocation is not supported by your browser.');
+        return;
+    }
+    const btn = isStart ? document.getElementById('useLocationStart') : document.getElementById('useLocationEnd');
+    if (btn) btn.disabled = true;
+    navigator.geolocation.getCurrentPosition(
+        (position) => {
+            const latlng = { lat: position.coords.latitude, lng: position.coords.longitude };
+            const item = makeCustomItem(latlng);
+            const input = isStart ? fromInput : toInput;
+            input.value = item.stop_name;
+            if (isStart) {
+                addStartMarker(item);
+            } else {
+                addEndMarker(item);
+            }
+            if (btn) btn.disabled = false;
+        },
+        (err) => {
+            console.error('Geolocation error:', err);
+            showNotification('Unable to retrieve your location.');
+            if (btn) btn.disabled = false;
+        },
+        { enableHighAccuracy: true, timeout: 10000 }
+    );
+}
+document.getElementById('useLocationStart').addEventListener('click', () => useCurrentLocation(true));
+document.getElementById('useLocationEnd').addEventListener('click', () => useCurrentLocation(false));
 
 // Suggestions dropdown for `fromInput`
 // Create container for suggestions appended to body so it can overlay the map
@@ -448,13 +552,26 @@ fromInput.addEventListener('input', () => {
     }, 2000);
 });
 
-// Hide suggestions when clicking outside
+// Hide suggestions when clicking outside and deselect active map input if click
+// is not on the map or a location input (prevents accidental map picks).
 document.addEventListener('click', (e) => {
     if (!fromSuggestions.contains(e.target) && e.target !== fromInput) {
         clearFromSuggestions();
     }
     if (!toSuggestions.contains(e.target) && e.target !== toInput) {
         clearToSuggestions();
+    }
+
+    // Deselect the active "click-on-map" input when the user clicks somewhere
+    // that is neither the map nor one of the location input boxes.
+    if (activeMapInput) {
+        const mapEl = document.getElementById('map');
+        const isMapClick = mapEl && mapEl.contains(e.target);
+        const isInputClick = e.target === fromInput || e.target === toInput
+            || e.target.classList.contains('stop-point-input');
+        if (!isMapClick && !isInputClick) {
+            setActiveMapInput(null);
+        }
     }
 });
 
@@ -468,12 +585,14 @@ window.addEventListener('scroll', () => {
     if (toSuggestions.style.display === 'block') positionToSuggestions();
 }, true);
 fromInput.addEventListener('focus', () => {
+    setActiveMapInput('from');
     if (fromSuggestions.children.length) {
         positionFromSuggestions();
         fromSuggestions.style.display = 'block';
     }
 });
 toInput.addEventListener('focus', () => {
+    setActiveMapInput('to');
     if (toSuggestions.children.length) {
         positionToSuggestions();
         toSuggestions.style.display = 'block';
@@ -545,17 +664,10 @@ toInput.addEventListener('input', () => {
 // Initialize map and click handlers
 document.addEventListener('DOMContentLoaded', () => {
     loadAccessibilitySettings();
-    loadUiSettings();
-    initializeLeafletMap();
-    initializePlannerToggle();
-});
-
-// Initialize map and click handlers
-document.addEventListener('DOMContentLoaded', () => {
-    loadAccessibilitySettings();
     loadLanguageSettings();
     loadUiSettings();
     initializeLeafletMap();
+    initializePlannerToggle();
 
     // Set datetime-local input constraint: max = now + 7 days
     const dtInput = document.getElementById('departureTime');
@@ -639,64 +751,149 @@ function initializeLeafletMap() {
             busStopUpdateTimer = null;
             updateBusStopMarkers();
         }, 300);
+        // Apply the same zoom threshold to live bus markers
+        updateLiveBusMarkers();
     });
     updateZoomHint();
 
-    // Map click hint control – shows what the next map click will do
-    const clickHintControl = L.control({ position: 'bottomright' });
-    clickHintControl.onAdd = function () {
-        const div = L.DomUtil.create('div', 'map-click-hint');
-        div.setAttribute('aria-live', 'polite');
-        div.id = 'mapClickHint';
-        return div;
-    };
-    clickHintControl.addTo(map);
-    updateMapClickHint();
-
-    // Handle map double-clicks for start / end point selection.
-    // 1st double-click  → set start point
-    // 2nd double-click  → set end point
-    // 3rd+ double-click → reset start (clear existing end) so the user can pick a new route
-    map.on('dblclick', (e) => {
+    // Handle map single click: if a location input is focused and awaiting a map
+    // click, fill it with the clicked coordinates and clear the active state.
+    map.on('click', (e) => {
+        if (!activeMapInput) return;
         const item = makeCustomItem(e.latlng);
         const label = getLabelFromItem(item);
         const t = translations[currentLang] || translations.en;
-        if (!selectedStartItem) {
+        if (activeMapInput === 'from') {
             if (fromInputTimer) { clearTimeout(fromInputTimer); fromInputTimer = null; }
             fromInput.value = label;
             clearFromSuggestions();
             addStartMarker(item);
             showNotification(t.mapClickNotifyStart);
-        } else if (!selectedEndItem) {
+        } else if (activeMapInput === 'to') {
             if (toInputTimer) { clearTimeout(toInputTimer); toInputTimer = null; }
             toInput.value = label;
             clearToSuggestions();
             addEndMarker(item);
             showNotification(t.mapClickNotifyEnd);
-        } else {
-            // Both already set — update start and clear end so the user can pick a new route
-            if (fromInputTimer) { clearTimeout(fromInputTimer); fromInputTimer = null; }
-            selectedEndItem = null;
-            toInput.value = '';
-            if (endMarker) { map.removeLayer(endMarker); endMarker = null; }
-            fromInput.value = label;
-            clearFromSuggestions();
-            addStartMarker(item);
-            showNotification(t.mapClickNotifyReset);
+        } else if (activeMapInput && activeMapInput.type === 'stop') {
+            const idx = activeMapInput.idx;
+            stopItems[idx] = item;
+            const inp = document.querySelector(`.stop-point-input[data-idx="${idx}"]`);
+            if (inp) inp.value = label;
+            clearStopSuggestions(idx);
+            addViaMarker(item, idx);
+            showNotification(t.mapClickNotifyStop || 'Via stop set.');
         }
-        updateMapClickHint();
+        setActiveMapInput(null);
     });
 
-    // Start live bus tracking with 30-second auto-refresh
-    startLiveBusRefresh();
+    // Start live bus tracking with 30-second auto-refresh if enabled
+    if (uiSettings.showLiveBuses) {
+        startLiveBusRefresh();
+    }
+
+    // Ensure Leaflet tiles are sized after layout settles
+    setTimeout(() => {
+        if (map) map.invalidateSize();
+    }, 0);
 }
 
 /**
  * Fetch bus stops within the current map bounds and render them as
  * clickable Leaflet markers.  Only active when zoom >= BUS_STOP_ZOOM_THRESHOLD.
  */
+async function fetchStopsForBoundsWithFallback(bounds) {
+    const params = new URLSearchParams({
+        min_lat: bounds.getSouth(),
+        max_lat: bounds.getNorth(),
+        min_lon: bounds.getWest(),
+        max_lon: bounds.getEast(),
+        limit: 200,
+    });
+
+    // Primary: dedicated bounds endpoint
+    try {
+        const res = await fetch(`${apiUrl}/stops/bounds?${params}`);
+        if (res.ok) {
+            const rows = await res.json();
+            if (Array.isArray(rows)) return rows;
+        }
+    } catch (err) {
+        console.warn('Bounds stop lookup failed, trying fallback:', err);
+    }
+
+    // Fallback: page through /stops and filter client-side by viewport.
+    // This keeps stop icons available even if /stops/bounds fails.
+    const inBounds = [];
+    const pageSize = 500;
+    const maxPages = 12; // hard cap to avoid excessive requests
+
+    for (let page = 0; page < maxPages; page++) {
+        const offset = page * pageSize;
+        try {
+            const res = await fetch(`${apiUrl}/stops?limit=${pageSize}&offset=${offset}`);
+            if (!res.ok) break;
+
+            const rows = await res.json();
+            if (!Array.isArray(rows) || rows.length === 0) break;
+
+            rows.forEach((stop) => {
+                const lat = parseFloat(stop.latitude);
+                const lon = parseFloat(stop.longitude);
+                if (isNaN(lat) || isNaN(lon)) return;
+                if (
+                    lat >= bounds.getSouth() &&
+                    lat <= bounds.getNorth() &&
+                    lon >= bounds.getWest() &&
+                    lon <= bounds.getEast()
+                ) {
+                    inBounds.push(stop);
+                }
+            });
+
+            if (rows.length < pageSize) break;
+        } catch (err) {
+            console.error('Fallback stop pagination failed:', err);
+            break;
+        }
+    }
+
+    // Deduplicate rail stops client-side (same logic as backend)
+    // to ensure only one station marker appears per CRS code
+    const railByCrs = {};
+    const output = [];
+
+    inBounds.forEach((stop) => {
+        if ((stop.stop_type || '').toLowerCase() === 'rail' && stop.crs_code) {
+            const crs = stop.crs_code.toUpperCase();
+            const existing = railByCrs[crs];
+            if (!existing) {
+                railByCrs[crs] = stop;
+            } else {
+                // Prefer the main station entry (9100 prefix) over entrances
+                const isPrimary = (s) => String(s.stop_id || '').startsWith('9100');
+                if (isPrimary(stop) && !isPrimary(existing)) {
+                    railByCrs[crs] = stop;
+                }
+            }
+        } else {
+            output.push(stop);
+        }
+    });
+
+    output.push(...Object.values(railByCrs));
+    return output;
+}
+
 async function updateBusStopMarkers() {
     if (!map) return;
+
+    if (!uiSettings.showBusStops) {
+        if (busStopLayerGroup) {
+            busStopLayerGroup.clearLayers();
+        }
+        return;
+    }
 
     // Below threshold – remove any existing stop markers and bail out
     if (map.getZoom() < BUS_STOP_ZOOM_THRESHOLD) {
@@ -706,21 +903,10 @@ async function updateBusStopMarkers() {
         return;
     }
 
-    const bounds = map.getBounds();
-    const params = new URLSearchParams({
-        min_lat: bounds.getSouth(),
-        max_lat: bounds.getNorth(),
-        min_lon: bounds.getWest(),
-        max_lon: bounds.getEast(),
-        limit: 200,
-    });
-
     let stops = [];
     try {
-        const res = await fetch(`${apiUrl}/stops/bounds?${params}`);
-        if (res.ok) {
-            stops = await res.json();
-        }
+        const bounds = map.getBounds();
+        stops = await fetchStopsForBoundsWithFallback(bounds);
     } catch (err) {
         console.error('Failed to fetch bus stops for map view:', err);
         return;
@@ -738,12 +924,17 @@ async function updateBusStopMarkers() {
         const lon = parseFloat(stop.longitude);
         if (isNaN(lat) || isNaN(lon)) return;
 
-        // Custom bus-stop icon (DivIcon so it works without external images)
+        const isRailStop = (stop.stop_type || '').toLowerCase() === 'rail';
+        const iconLabel = isRailStop ? 'R' : 'B';
+        const iconColor = isRailStop ? '#7B2CBF' : '#2E5090';
+        const iconAria = isRailStop ? 'Rail stop' : 'Bus stop';
+
+        // Custom stop icon (DivIcon so it works without external images)
         const icon = L.divIcon({
-            className: 'bus-stop-icon',
-            html: `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" role="img" aria-label="Bus stop">
-                <circle cx="16" cy="16" r="15" fill="#2E5090" stroke="white" stroke-width="2.5"/>
-                <text x="16" y="21" font-family="Arial,sans-serif" font-size="15" font-weight="bold" fill="white" text-anchor="middle">B</text>
+            className: isRailStop ? 'rail-stop-icon' : 'bus-stop-icon',
+            html: `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" role="img" aria-label="${iconAria}">
+                <circle cx="16" cy="16" r="15" fill="${iconColor}" stroke="white" stroke-width="2.5"/>
+                <text x="16" y="21" font-family="Arial,sans-serif" font-size="15" font-weight="bold" fill="white" text-anchor="middle">${iconLabel}</text>
             </svg>`,
             iconSize: [32, 32],
             iconAnchor: [16, 16],
@@ -754,7 +945,7 @@ async function updateBusStopMarkers() {
         const marker = L.marker([lat, lon], {
             icon,
             title: label,
-            alt: `Bus stop: ${label}`,
+            alt: `${isRailStop ? 'Rail' : 'Bus'} stop: ${label}`,
         });
 
         // Build popup with "Set as Start" / "Set as End" buttons
@@ -792,8 +983,19 @@ async function updateBusStopMarkers() {
             updateMapClickHint();
         });
 
+        const viewDeparturesBtn = document.createElement('button');
+        viewDeparturesBtn.className = 'bus-stop-popup-btn';
+        viewDeparturesBtn.setAttribute('aria-label', `View departures for ${label}`);
+        const t = translations[currentLang] || translations.en;
+        viewDeparturesBtn.textContent = `🕒 ${t.viewDepartures || 'View Departures'}`;
+        viewDeparturesBtn.addEventListener('click', async () => {
+            marker.closePopup();
+            await openDeparturesOverlay(stop);
+        });
+
         btnGroup.appendChild(setStartBtn);
         btnGroup.appendChild(setEndBtn);
+        btnGroup.appendChild(viewDeparturesBtn);
         popupEl.appendChild(btnGroup);
 
         marker.bindPopup(popupEl, { maxWidth: 220 });
@@ -816,6 +1018,21 @@ async function updateBusStopMarkers() {
  */
 async function updateLiveBusMarkers() {
     if (!map) return;
+
+    if (!uiSettings.showLiveBuses) {
+        if (liveBusLayerGroup) {
+            liveBusLayerGroup.clearLayers();
+        }
+        return;
+    }
+
+    // Only show live bus icons at the same zoom level as bus stop icons
+    if (map.getZoom() < BUS_STOP_ZOOM_THRESHOLD) {
+        if (liveBusLayerGroup) {
+            liveBusLayerGroup.clearLayers();
+        }
+        return;
+    }
 
     let data;
     try {
@@ -953,6 +1170,22 @@ function startLiveBusRefresh() {
     liveBusRefreshInterval = setInterval(tick, 1000);
 }
 
+function stopLiveBusRefresh() {
+    if (liveBusRefreshInterval) {
+        clearInterval(liveBusRefreshInterval);
+        liveBusRefreshInterval = null;
+    }
+
+    if (liveBusRefreshTimerControl) {
+        liveBusRefreshTimerControl.remove();
+        liveBusRefreshTimerControl = null;
+    }
+
+    if (liveBusLayerGroup) {
+        liveBusLayerGroup.clearLayers();
+    }
+}
+
 
 /** Build the SVG countdown ring HTML for the refresh timer control. */
 function _buildTimerHTML(secondsLeft, total) {
@@ -985,6 +1218,9 @@ function initializePlannerToggle() {
     plannerToggle.addEventListener('click', () => {
         const isCollapsed = routePlanner.classList.toggle('collapsed');
         plannerToggle.setAttribute('aria-expanded', !isCollapsed);
+        setTimeout(() => {
+            if (map) map.invalidateSize();
+        }, 320);
     });
 }
 
@@ -1005,29 +1241,6 @@ closeSidebar.addEventListener('click', () => {
 document.addEventListener('click', (e) => {
     if (!sidebar.contains(e.target) && !menuBtn.contains(e.target)) {
         sidebar.classList.remove('active');
-    }
-});
-
-// Accessibility Modal
-const accessibilityLink = document.getElementById('accessibilityLink');
-const accessibilityModal = document.getElementById('accessibilityModal');
-const closeModal = document.getElementById('closeModal');
-const saveSettings = document.getElementById('saveSettings');
-
-accessibilityLink.addEventListener('click', (e) => {
-    e.preventDefault();
-    accessibilityModal.classList.add('active');
-    sidebar.classList.remove('active');
-});
-
-closeModal.addEventListener('click', () => {
-    accessibilityModal.classList.remove('active');
-});
-
-// Close modal when clicking outside
-accessibilityModal.addEventListener('click', (e) => {
-    if (e.target === accessibilityModal) {
-        accessibilityModal.classList.remove('active');
     }
 });
 
@@ -1087,12 +1300,18 @@ const saveUiSettingsBtn = document.getElementById('saveUiSettings');
 const settingsShowWeatherInput = document.getElementById('settingsShowWeather');
 const settingsShowMapHintsInput = document.getElementById('settingsShowMapHints');
 const settingsDarkMapInput = document.getElementById('settingsDarkMap');
+const settingsShowLiveBusesInput = document.getElementById('settingsShowLiveBuses');
+const settingsShowBusStopsInput = document.getElementById('settingsShowBusStops');
 const settingsDisableNotificationsInput = document.getElementById('settingsDisableNotifications');
+const fontSizeInput = document.getElementById('fontSize');
+const highContrastInput = document.getElementById('highContrast');
 
 const defaultUiSettings = {
     showWeather: true,
     showMapHints: true,
     darkMap: false,
+    showLiveBuses: true,
+    showBusStops: true,
     disableNotifications: false,
 };
 
@@ -1106,6 +1325,16 @@ function applyUiSettings() {
 
     document.body.classList.toggle('hide-map-hints', !uiSettings.showMapHints);
     document.body.classList.toggle('map-night-mode', !!uiSettings.darkMap);
+
+    if (map) {
+        if (uiSettings.showLiveBuses) {
+            startLiveBusRefresh();
+        } else {
+            stopLiveBusRefresh();
+        }
+        updateBusStopMarkers();
+    }
+
     updateMapClickHint();
 }
 
@@ -1128,6 +1357,8 @@ function loadUiSettings() {
     if (settingsShowWeatherInput) settingsShowWeatherInput.checked = !!uiSettings.showWeather;
     if (settingsShowMapHintsInput) settingsShowMapHintsInput.checked = !!uiSettings.showMapHints;
     if (settingsDarkMapInput) settingsDarkMapInput.checked = !!uiSettings.darkMap;
+    if (settingsShowLiveBusesInput) settingsShowLiveBusesInput.checked = !!uiSettings.showLiveBuses;
+    if (settingsShowBusStopsInput) settingsShowBusStopsInput.checked = !!uiSettings.showBusStops;
     if (settingsDisableNotificationsInput) settingsDisableNotificationsInput.checked = !!uiSettings.disableNotifications;
     applyUiSettings();
 }
@@ -1153,21 +1384,30 @@ const translations = {
         enterPoints: 'Enter your start and end points to plan your journey.',
         menuTitle: 'Menu',
         home: 'Home',
-        accessibility: 'Accessibility Settings',
         languages: 'Languages',
         settings: 'Settings',
         reportBug: 'Report Bug',
         settingsTitle: 'Settings',
+        settingsSectionMap: 'Map Settings',
+        settingsSectionNotifications: 'Notification Settings',
+        settingsSectionAccessibility: 'Accessibility Settings',
         settingsShowWeather: 'Show weather icon',
         settingsShowMapHints: 'Show map helper pop-ups',
         settingsDarkMap: 'Dark mode map tint',
+        settingsShowLiveBuses: 'Show live bus locations',
+        settingsShowBusStops: 'Show bus stops',
         settingsDisableNotifications: 'Disable notification messages',
+        fontSize: 'Font Size:',
+        highContrast: 'High Contrast Mode:',
         settingsSave: 'Save Settings',
         settingsSaved: 'Settings updated successfully!',
         departs: 'DEPARTS',
         arrives: 'ARRIVES',
         bus: 'Bus',
+        train: 'Train',
+        tram: 'Tram',
         walk: 'Walk',
+        serviceTo: 'Service to',
         viewOnMap: '🗺️ View on Map',
         dateTime: 'Date & Time:',
         timeTypeLabel: 'Time Type:',
@@ -1178,12 +1418,20 @@ const translations = {
         planningRoute: 'Planning route…',
         routePlanningError: 'Error planning route',
         routePlanningFailed: 'Failed to plan route. See console for details.',
-        clickHintStart: '🖱️ Double-click the map to set your start point',
-        clickHintEnd: '🖱️ Double-click the map to set your end point',
-        clickHintReset: '🖱️ Double-click the map to change your start point',
-        mapClickNotifyStart: 'Start point set. Now double-click your destination on the map.',
+        mapPickPlaceholder: 'Click on the map or start typing a stop name to set this location',
+        mapClickNotifyStart: 'Start point set.',
         mapClickNotifyEnd: "End point set. Click 'Plan Route' to continue.",
-        mapClickNotifyReset: 'Start point updated. Now double-click your destination on the map.'
+        mapClickNotifyReset: 'Start point updated.',
+        mapClickNotifyStop: 'Via stop set.',
+        stopDwellLabel: 'Stop time (min):',
+        viewDepartures: 'View Departures',
+        departuresTitle: 'Departures (next 24 hours)',
+        departuresLoading: 'Loading departures…',
+        departuresNone: 'No scheduled departures found in the next 24 hours.',
+        departuresError: 'Could not load departures for this stop.',
+        departuresToPrefix: 'To',
+        arrivesLateWarning: '⚠️ Arrives {mins} min after target time',
+        alreadyDepartedWarning: '⚠️ This journey has already departed'
     },
     zh: {
         header: '兰开夏郡旅程规划',
@@ -1204,21 +1452,30 @@ const translations = {
         enterPoints: '输入起点和终点以规划您的旅程。',
         menuTitle: '菜单',
         home: '主页',
-        accessibility: '无障碍设置',
         languages: '语言',
         settings: '设置',
         reportBug: '报告错误',
         settingsTitle: '设置',
+        settingsSectionMap: '地图设置',
+        settingsSectionNotifications: '通知设置',
+        settingsSectionAccessibility: '无障碍设置',
         settingsShowWeather: '显示天气图标',
         settingsShowMapHints: '显示地图提示弹窗',
         settingsDarkMap: '地图夜间深色',
+        settingsShowLiveBuses: '显示实时公交位置',
+        settingsShowBusStops: '显示公交站点',
         settingsDisableNotifications: '禁用通知消息',
+        fontSize: '字体大小：',
+        highContrast: '高对比度模式：',
         settingsSave: '保存设置',
         settingsSaved: '设置更新成功！',
         departs: '出发',
         arrives: '到达',
         bus: '公交',
+        train: '火车',
+        tram: '电车',
         walk: '步行',
+        serviceTo: '开往',
         viewOnMap: '🗺️ 在地图上查看',
         dateTime: '日期和时间：',
         timeTypeLabel: '时间类型：',
@@ -1229,12 +1486,20 @@ const translations = {
         planningRoute: '正在规划路线…',
         routePlanningError: '路线规划出错',
         routePlanningFailed: '路线规划失败。请查看控制台了解详情。',
-        clickHintStart: '🖱️ 双击地图设置起点',
-        clickHintEnd: '🖱️ 双击地图设置终点',
-        clickHintReset: '🖱️ 双击地图更改起点',
-        mapClickNotifyStart: '起点已设置。请在地图上双击目的地。',
+        mapPickPlaceholder: '点击地图设置此位置',
+        mapClickNotifyStart: '起点已设置。',
         mapClickNotifyEnd: '终点已设置。点击"规划路线"继续。',
-        mapClickNotifyReset: '起点已更新。请在地图上双击目的地。'
+        mapClickNotifyReset: '起点已更新。',
+        mapClickNotifyStop: '途经站点已设置。',
+        stopDwellLabel: '停留时间（分钟）：',
+        viewDepartures: '查看发车',
+        departuresTitle: '发车信息（未来24小时）',
+        departuresLoading: '正在加载发车信息…',
+        departuresNone: '未来24小时内没有计划发车。',
+        departuresError: '无法加载该站点的发车信息。',
+        departuresToPrefix: '开往',
+        arrivesLateWarning: '⚠️ 比预定到达时间晚 {mins} 分钟',
+        alreadyDepartedWarning: '⚠️ 此行程已出发'
     }
 };
 
@@ -1275,7 +1540,6 @@ function applyTranslations(lang) {
     // Sidebar
     document.querySelector('.sidebar-header h2').textContent = t.menuTitle;
     document.querySelector('.sidebar-menu li:nth-child(1) a').textContent = t.home;
-    document.querySelector('#accessibilityLink').textContent = t.accessibility;
     document.querySelector('#languageLink').textContent = t.languages;
     document.querySelector('#settingsLink').textContent = t.settings;
     document.querySelector('#reportBugLink').textContent = t.reportBug;
@@ -1283,14 +1547,28 @@ function applyTranslations(lang) {
     // Settings modal
     const settingsTitle = document.querySelector('#settingsModal .modal-header h2');
     if (settingsTitle) settingsTitle.textContent = t.settingsTitle;
+    const sectionMap = document.getElementById('settingsSectionMap');
+    if (sectionMap) sectionMap.textContent = t.settingsSectionMap;
+    const sectionNotifications = document.getElementById('settingsSectionNotifications');
+    if (sectionNotifications) sectionNotifications.textContent = t.settingsSectionNotifications;
+    const sectionAccessibility = document.getElementById('settingsSectionAccessibility');
+    if (sectionAccessibility) sectionAccessibility.textContent = t.settingsSectionAccessibility;
     const weatherLabel = document.querySelector('label[for="settingsShowWeather"]');
     if (weatherLabel) weatherLabel.textContent = t.settingsShowWeather;
     const hintsLabel = document.querySelector('label[for="settingsShowMapHints"]');
     if (hintsLabel) hintsLabel.textContent = t.settingsShowMapHints;
     const darkMapLabel = document.querySelector('label[for="settingsDarkMap"]');
     if (darkMapLabel) darkMapLabel.textContent = t.settingsDarkMap;
+    const showLiveBusesLabel = document.querySelector('label[for="settingsShowLiveBuses"]');
+    if (showLiveBusesLabel) showLiveBusesLabel.textContent = t.settingsShowLiveBuses;
+    const showBusStopsLabel = document.querySelector('label[for="settingsShowBusStops"]');
+    if (showBusStopsLabel) showBusStopsLabel.textContent = t.settingsShowBusStops;
     const disableNotificationsLabel = document.querySelector('label[for="settingsDisableNotifications"]');
     if (disableNotificationsLabel) disableNotificationsLabel.textContent = t.settingsDisableNotifications;
+    const fontSizeLabel = document.querySelector('label[for="fontSize"]');
+    if (fontSizeLabel) fontSizeLabel.textContent = t.fontSize;
+    const highContrastLabel = document.querySelector('label[for="highContrast"]');
+    if (highContrastLabel) highContrastLabel.textContent = t.highContrast;
     const settingsSaveBtn = document.getElementById('saveUiSettings');
     if (settingsSaveBtn) settingsSaveBtn.textContent = t.settingsSave;
 
@@ -1327,6 +1605,8 @@ settingsLink.addEventListener('click', (e) => {
     settingsShowWeatherInput.checked = !!uiSettings.showWeather;
     settingsShowMapHintsInput.checked = !!uiSettings.showMapHints;
     if (settingsDarkMapInput) settingsDarkMapInput.checked = !!uiSettings.darkMap;
+    if (settingsShowLiveBusesInput) settingsShowLiveBusesInput.checked = !!uiSettings.showLiveBuses;
+    if (settingsShowBusStopsInput) settingsShowBusStopsInput.checked = !!uiSettings.showBusStops;
     if (settingsDisableNotificationsInput) settingsDisableNotificationsInput.checked = !!uiSettings.disableNotifications;
     settingsModal.classList.add('active');
     sidebar.classList.remove('active');
@@ -1346,8 +1626,11 @@ saveUiSettingsBtn.addEventListener('click', () => {
     uiSettings.showWeather = !!settingsShowWeatherInput.checked;
     uiSettings.showMapHints = !!settingsShowMapHintsInput.checked;
     uiSettings.darkMap = !!(settingsDarkMapInput && settingsDarkMapInput.checked);
+    uiSettings.showLiveBuses = !!(settingsShowLiveBusesInput && settingsShowLiveBusesInput.checked);
+    uiSettings.showBusStops = !!(settingsShowBusStopsInput && settingsShowBusStopsInput.checked);
     uiSettings.disableNotifications = !!(settingsDisableNotificationsInput && settingsDisableNotificationsInput.checked);
     localStorage.setItem('ui_settings', JSON.stringify(uiSettings));
+    saveAccessibilitySettings();
     applyUiSettings();
     settingsModal.classList.remove('active');
     const t = translations[currentLang] || translations.en;
@@ -1364,9 +1647,9 @@ function loadLanguageSettings() {
 }
 
 // Save accessibility settings
-saveSettings.addEventListener('click', () => {
-    const fontSize = document.getElementById('fontSize').value;
-    const highContrast = document.getElementById('highContrast').checked;
+function saveAccessibilitySettings() {
+    const fontSize = fontSizeInput ? fontSizeInput.value : 'medium';
+    const highContrast = highContrastInput ? highContrastInput.checked : false;
     // Apply font size - remove only the specific font size classes
     document.body.classList.remove('font-small', 'font-medium', 'font-large', 'font-extra-large');
     document.body.classList.add(`font-${fontSize}`);
@@ -1383,25 +1666,27 @@ saveSettings.addEventListener('click', () => {
         fontSize,
         highContrast,
     }));
-
-    accessibilityModal.classList.remove('active');
-
-    // Show accessible notification
-    showNotification('Accessibility settings saved successfully!');
-});
+}
 
 // Load saved accessibility settings
 function loadAccessibilitySettings() {
     const saved = localStorage.getItem('accessibility');
+    document.body.classList.remove('font-small', 'font-medium', 'font-large', 'font-extra-large');
+    document.body.classList.remove('high-contrast');
     if (saved) {
-        const settings = JSON.parse(saved);
+        let settings = {};
+        try {
+            settings = JSON.parse(saved || '{}');
+        } catch (err) {
+            settings = {};
+        }
 
-        document.getElementById('fontSize').value = settings.fontSize;
-        document.getElementById('highContrast').checked = settings.highContrast;
+        if (fontSizeInput && settings.fontSize) fontSizeInput.value = settings.fontSize;
+        if (highContrastInput) highContrastInput.checked = !!settings.highContrast;
 
 
         // Apply settings
-        document.body.classList.add(`font-${settings.fontSize}`);
+        document.body.classList.add(`font-${settings.fontSize || 'medium'}`);
         if (settings.highContrast) {
             document.body.classList.add('high-contrast');
         }
@@ -1418,180 +1703,132 @@ const routeDisplay = document.getElementById('routeDisplay');
 // Layer group to hold drawn routes so we can clear them
 let routeLayerGroup = null;
 
-function initializeRouteDisplayInteractions() {
-    if (!routeDisplay) return;
-    const dragHandle = routeDisplay.querySelector('h3');
-    if (!dragHandle) return;
+let departuresOverlay = null;
+let departuresOverlayTitle = null;
+let departuresOverlayBody = null;
 
-    let resizer = routeDisplay.querySelector('.route-display-resizer');
-    if (!resizer) {
-        resizer = document.createElement('div');
-        resizer.className = 'route-display-resizer';
-        resizer.setAttribute('aria-hidden', 'true');
-        routeDisplay.appendChild(resizer);
-    }
+function ensureDeparturesOverlay() {
+    if (departuresOverlay) return departuresOverlay;
+    if (!routeDisplay) return null;
 
-    let isDragging = false;
-    let isResizing = false;
-    let activePointerId = null;
-    let dragOffsetX = 0;
-    let dragOffsetY = 0;
+    departuresOverlay = document.createElement('section');
+    departuresOverlay.className = 'route-display-overlay';
+    departuresOverlay.setAttribute('aria-live', 'polite');
 
-    let resizeStartX = 0;
-    let resizeStartY = 0;
-    let resizeStartWidth = 0;
-    let resizeStartHeight = 0;
+    const header = document.createElement('div');
+    header.className = 'route-display-overlay-header';
 
-    const getPanelMinWidth = () => parseFloat(getComputedStyle(routeDisplay).minWidth) || 260;
-    const getPanelMinHeight = () => parseFloat(getComputedStyle(routeDisplay).minHeight) || 160;
+    departuresOverlayTitle = document.createElement('div');
+    departuresOverlayTitle.className = 'route-display-overlay-title';
 
-    const normalizePositionAnchor = () => {
-        const container = routeDisplay.parentElement;
-        if (!container) return;
-        const containerRect = container.getBoundingClientRect();
-        const panelRect = routeDisplay.getBoundingClientRect();
-        routeDisplay.style.left = (panelRect.left - containerRect.left) + 'px';
-        routeDisplay.style.top = (panelRect.top - containerRect.top) + 'px';
-        routeDisplay.style.right = 'auto';
-    };
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'route-display-overlay-close';
+    closeBtn.setAttribute('type', 'button');
+    closeBtn.setAttribute('aria-label', 'Close departures panel');
+    closeBtn.innerHTML = '&times;';
+    closeBtn.addEventListener('click', closeDeparturesOverlay);
 
-    const clampToContainer = () => {
-        const container = routeDisplay.parentElement;
-        if (!container) return;
+    header.appendChild(departuresOverlayTitle);
+    header.appendChild(closeBtn);
 
-        const containerRect = container.getBoundingClientRect();
-        const panelRect = routeDisplay.getBoundingClientRect();
+    departuresOverlayBody = document.createElement('div');
+    departuresOverlayBody.className = 'route-display-overlay-body';
 
-        // If panel has not been moved yet (still right-anchored), skip clamping.
-        if (!routeDisplay.style.left && !routeDisplay.style.top) return;
+    departuresOverlay.appendChild(header);
+    departuresOverlay.appendChild(departuresOverlayBody);
+    routeDisplay.appendChild(departuresOverlay);
 
-        const maxAllowedWidth = Math.max(getPanelMinWidth(), containerRect.width);
-        const maxAllowedHeight = Math.max(getPanelMinHeight(), containerRect.height);
-
-        const currentWidth = panelRect.width;
-        const currentHeight = panelRect.height;
-
-        if (currentWidth > maxAllowedWidth) {
-            routeDisplay.style.width = maxAllowedWidth + 'px';
-        }
-        if (currentHeight > maxAllowedHeight) {
-            routeDisplay.style.height = maxAllowedHeight + 'px';
-        }
-
-        const updatedRect = routeDisplay.getBoundingClientRect();
-        const maxLeft = Math.max(0, containerRect.width - updatedRect.width);
-        const maxTop = Math.max(0, containerRect.height - updatedRect.height);
-
-        const currentLeft = parseFloat(routeDisplay.style.left || '0');
-        const currentTop = parseFloat(routeDisplay.style.top || '0');
-
-        routeDisplay.style.left = Math.min(Math.max(0, currentLeft), maxLeft) + 'px';
-        routeDisplay.style.top = Math.min(Math.max(0, currentTop), maxTop) + 'px';
-    };
-
-    const onPointerMove = (e) => {
-        if (activePointerId !== null && e.pointerId !== activePointerId) return;
-        const container = routeDisplay.parentElement;
-        if (!container) return;
-
-        const containerRect = container.getBoundingClientRect();
-
-        if (isDragging) {
-            const panelRect = routeDisplay.getBoundingClientRect();
-
-            let left = e.clientX - containerRect.left - dragOffsetX;
-            let top = e.clientY - containerRect.top - dragOffsetY;
-
-            const maxLeft = Math.max(0, containerRect.width - panelRect.width);
-            const maxTop = Math.max(0, containerRect.height - panelRect.height);
-
-            left = Math.min(Math.max(0, left), maxLeft);
-            top = Math.min(Math.max(0, top), maxTop);
-
-            routeDisplay.style.left = left + 'px';
-            routeDisplay.style.top = top + 'px';
-            routeDisplay.style.right = 'auto';
-        }
-
-        if (isResizing) {
-            const leftPx = parseFloat(routeDisplay.style.left || '0');
-            const topPx = parseFloat(routeDisplay.style.top || '0');
-
-            const maxWidth = Math.max(getPanelMinWidth(), containerRect.width - leftPx);
-            const maxHeight = Math.max(getPanelMinHeight(), containerRect.height - topPx);
-
-            let nextWidth = resizeStartWidth + (e.clientX - resizeStartX);
-            let nextHeight = resizeStartHeight + (e.clientY - resizeStartY);
-
-            nextWidth = Math.min(Math.max(getPanelMinWidth(), nextWidth), maxWidth);
-            nextHeight = Math.min(Math.max(getPanelMinHeight(), nextHeight), maxHeight);
-
-            routeDisplay.style.width = nextWidth + 'px';
-            routeDisplay.style.height = nextHeight + 'px';
-        }
-    };
-
-    const onPointerUp = (e) => {
-        if (activePointerId !== null && e.pointerId !== activePointerId) return;
-        if (!isDragging && !isResizing) return;
-        isDragging = false;
-        isResizing = false;
-        activePointerId = null;
-        document.body.classList.remove('route-panel-dragging');
-        document.body.classList.remove('route-panel-resizing');
-        window.removeEventListener('pointermove', onPointerMove);
-        window.removeEventListener('pointerup', onPointerUp);
-        window.removeEventListener('pointercancel', onPointerUp);
-    };
-
-    dragHandle.addEventListener('pointerdown', (e) => {
-        // Primary pointer only
-        if (!e.isPrimary) return;
-        if (e.target === resizer) return;
-        normalizePositionAnchor();
-        clampToContainer();
-
-        isDragging = true;
-        activePointerId = e.pointerId;
-
-        const panelRect = routeDisplay.getBoundingClientRect();
-        dragOffsetX = e.clientX - panelRect.left;
-        dragOffsetY = e.clientY - panelRect.top;
-
-        document.body.classList.add('route-panel-dragging');
-        window.addEventListener('pointermove', onPointerMove);
-        window.addEventListener('pointerup', onPointerUp);
-        window.addEventListener('pointercancel', onPointerUp);
-        e.preventDefault();
-    });
-
-    resizer.addEventListener('pointerdown', (e) => {
-        if (!e.isPrimary) return;
-        normalizePositionAnchor();
-        clampToContainer();
-
-        isResizing = true;
-        activePointerId = e.pointerId;
-
-        const panelRect = routeDisplay.getBoundingClientRect();
-        resizeStartX = e.clientX;
-        resizeStartY = e.clientY;
-        resizeStartWidth = panelRect.width;
-        resizeStartHeight = panelRect.height;
-
-        document.body.classList.add('route-panel-resizing');
-        window.addEventListener('pointermove', onPointerMove);
-        window.addEventListener('pointerup', onPointerUp);
-        window.addEventListener('pointercancel', onPointerUp);
-        e.preventDefault();
-        e.stopPropagation();
-    });
-
-    // Keep panel visible if viewport/container changes while resized.
-    window.addEventListener('resize', clampToContainer);
+    return departuresOverlay;
 }
 
-initializeRouteDisplayInteractions();
+function closeDeparturesOverlay() {
+    if (!departuresOverlay) return;
+    departuresOverlay.classList.remove('active');
+    if (routeDisplay) {
+        routeDisplay.classList.remove('showing-departures');
+    }
+}
+
+function formatDepartureDateTime(value) {
+    if (!value) return '';
+    const d = new Date(value);
+    if (Number.isNaN(d.getTime())) return value;
+    return d.toLocaleString([], {
+        weekday: 'short',
+        hour: '2-digit',
+        minute: '2-digit',
+        day: '2-digit',
+        month: 'short',
+    });
+}
+
+async function openDeparturesOverlay(stop) {
+    const overlay = ensureDeparturesOverlay();
+    if (!overlay || !departuresOverlayBody || !departuresOverlayTitle) return;
+
+    const t = translations[currentLang] || translations.en;
+    const stopName = (stop && (stop.stop_name || stop.name || stop.label)) || 'Stop';
+    const stopId = stop && stop.stop_id;
+
+    departuresOverlayTitle.textContent = `${t.departuresTitle || 'Departures (next 24 hours)'} · ${stopName}`;
+    departuresOverlayBody.innerHTML = `<p>${t.departuresLoading || 'Loading departures…'}</p>`;
+    overlay.classList.add('active');
+    if (routeDisplay) {
+        routeDisplay.classList.add('showing-departures');
+    }
+
+    if (!stopId) {
+        departuresOverlayBody.innerHTML = `<p>${t.departuresError || 'Could not load departures for this stop.'}</p>`;
+        return;
+    }
+
+    try {
+        const res = await fetch(`${apiUrl}/stops/${encodeURIComponent(stopId)}/departures`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        const departures = Array.isArray(data.departures) ? data.departures : [];
+
+        if (!departures.length) {
+            departuresOverlayBody.innerHTML = `<p>${t.departuresNone || 'No scheduled departures found in the next 24 hours.'}</p>`;
+            return;
+        }
+
+        const list = document.createElement('ul');
+        list.className = 'departures-list';
+
+        departures.forEach((dep) => {
+            const item = document.createElement('li');
+            item.className = 'departures-item';
+
+            const route = document.createElement('div');
+            route.className = 'departures-item-route';
+            route.textContent = `${dep.route_name || dep.route_id || 'Route'} · ${dep.departure_time || ''}`;
+
+            const meta = document.createElement('div');
+            meta.className = 'departures-item-meta';
+            const when = formatDepartureDateTime(dep.departure_datetime);
+            const operator = dep.operator ? ` · ${dep.operator}` : '';
+            const destinationText = dep.final_destination_name
+                ? ` · ${(t.departuresToPrefix || 'To')} ${dep.final_destination_name}`
+                : '';
+            meta.textContent = `${when}${destinationText}${operator}`;
+
+            item.appendChild(route);
+            item.appendChild(meta);
+            list.appendChild(item);
+        });
+
+        departuresOverlayBody.innerHTML = '';
+        departuresOverlayBody.appendChild(list);
+    } catch (err) {
+        console.error('Failed to load departures:', err);
+        departuresOverlayBody.innerHTML = `<p>${t.departuresError || 'Could not load departures for this stop.'}</p>`;
+    }
+}
+
+window.addEventListener('resize', () => {
+    if (map) map.invalidateSize();
+});
 
 async function fetchStop(stop_id) {
     try {
@@ -1615,6 +1852,9 @@ function clearRouteLayers() {
 
 // Cache for route waypoints responses keyed by "route_id|direction|from_stop|to_stop"
 const waypointsCache = {};
+// Cache for route stops-between responses keyed by
+// "route_id|direction|from_stop|to_stop|departure_time"
+const routeStopsBetweenCache = {};
 
 /**
  * Fetch ordered waypoints for a bus route leg from the backend.
@@ -1649,6 +1889,37 @@ async function fetchRouteWaypoints(routeId, direction, fromStop, toStop) {
     } catch (err) {
         console.error('fetchRouteWaypoints error:', err);
         waypointsCache[cacheKey] = null;
+        return null;
+    }
+}
+
+/**
+ * Fetch ordered stop calls between origin/destination for one route leg.
+ * Returns an object with { stops: [...] } or null if unavailable.
+ */
+async function fetchRouteStopsBetween(routeId, direction, fromStop, toStop, departureTime) {
+    if (!routeId || !fromStop || !toStop) return null;
+    const cacheKey = `${routeId}|${direction || ''}|${fromStop}|${toStop}|${departureTime || ''}`;
+    if (routeStopsBetweenCache[cacheKey] !== undefined) return routeStopsBetweenCache[cacheKey];
+
+    try {
+        let url = `${apiUrl}/routes/${encodeURIComponent(routeId)}/stops-between`;
+        url += `?from_stop=${encodeURIComponent(fromStop)}`;
+        url += `&to_stop=${encodeURIComponent(toStop)}`;
+        if (direction) url += `&direction=${encodeURIComponent(direction)}`;
+        if (departureTime) url += `&departure_time=${encodeURIComponent(departureTime)}`;
+
+        const res = await fetch(url);
+        if (!res.ok) {
+            routeStopsBetweenCache[cacheKey] = null;
+            return null;
+        }
+        const data = await res.json();
+        routeStopsBetweenCache[cacheKey] = data;
+        return data;
+    } catch (err) {
+        console.error('fetchRouteStopsBetween error:', err);
+        routeStopsBetweenCache[cacheKey] = null;
         return null;
     }
 }
@@ -1712,13 +1983,367 @@ async function ensureSelectedFromInput(isStart = true) {
     return false;
 }
 
+/**
+ * Ensure a stop at a given index is resolved (typed text → stop item).
+ * @param {number} idx - Index into stopItems / stop input elements
+ */
+async function ensureStopResolved(idx) {
+    if (stopItems[idx]) return true;
+    const inputs = document.querySelectorAll('.stop-point-input');
+    const input = inputs[idx];
+    if (!input) return false;
+    const q = input.value && input.value.trim();
+    if (!q) return false;
+    try {
+        const results = await getPossibleLocations(q);
+        if (results && results.length) {
+            const match = results.find(it => (getLabelFromItem(it) || '').trim().toLowerCase() === q.toLowerCase()) || results[0];
+            if (match) {
+                stopItems[idx] = match;
+                return true;
+            }
+        }
+    } catch (err) {
+        console.error('ensureStopResolved error', err);
+    }
+    return false;
+}
+
+/**
+ * Refresh the Add Stop button state based on current stop count.
+ */
+function refreshAddStopBtn() {
+    const btn = document.getElementById('addStopBtn');
+    if (!btn) return;
+    const count = document.querySelectorAll('.stop-input-row').length;
+    btn.disabled = count >= MAX_STOPS;
+}
+
+/**
+ * Create and append a new intermediate stop input row.
+ */
+function addStopRow() {
+    const container = document.getElementById('stopsContainer');
+    if (!container) return;
+    const currentCount = container.querySelectorAll('.stop-input-row').length;
+    if (currentCount >= MAX_STOPS) return;
+
+    const idx = currentCount; // 0-based index for this stop
+    stopItems[idx] = null;
+    stopInputTimers[idx] = null;
+    stopDwellTimes[idx] = 0;
+
+    // Create row wrapper
+    const row = document.createElement('div');
+    row.className = 'stop-input-row';
+    row.dataset.stopIdx = String(idx);
+
+    // Input group
+    const group = document.createElement('div');
+    group.className = 'input-group';
+
+    const label = document.createElement('label');
+    label.textContent = `Via Stop ${idx + 1}:`;
+    label.htmlFor = `stopPoint${idx}`;
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.id = `stopPoint${idx}`;
+    input.className = 'stop-point-input';
+    input.placeholder = 'Enter intermediate stop';
+    input.dataset.idx = String(idx);
+
+    group.appendChild(label);
+    group.appendChild(input);
+
+    // Dwell time group
+    const dwellGroup = document.createElement('div');
+    dwellGroup.className = 'input-group stop-dwell-group';
+
+    const dwellLabel = document.createElement('label');
+    const tNow = translations[currentLang] || translations.en;
+    dwellLabel.textContent = tNow.stopDwellLabel || 'Stop time (min):';
+    dwellLabel.htmlFor = `stopDwell${idx}`;
+
+    const dwellSelect = document.createElement('select');
+    dwellSelect.id = `stopDwell${idx}`;
+    dwellSelect.className = 'stop-dwell-select';
+    dwellSelect.dataset.idx = String(idx);
+    dwellSelect.setAttribute('aria-label', `Stop time in minutes for via stop ${idx + 1}`);
+    // Options: 0 to 120 minutes in 5-minute increments
+    for (let min = 0; min <= 120; min += 5) {
+        const opt = document.createElement('option');
+        opt.value = String(min);
+        opt.textContent = min === 0 ? '0 (no wait)' : String(min);
+        dwellSelect.appendChild(opt);
+    }
+    dwellSelect.value = '0';
+    dwellSelect.addEventListener('change', () => {
+        const dIdx = parseInt(dwellSelect.dataset.idx, 10);
+        stopDwellTimes[dIdx] = parseInt(dwellSelect.value, 10) || 0;
+    });
+
+    dwellGroup.appendChild(dwellLabel);
+    dwellGroup.appendChild(dwellSelect);
+
+    // Remove button
+    const removeBtn = document.createElement('button');
+    removeBtn.type = 'button';
+    removeBtn.className = 'remove-stop-btn';
+    removeBtn.setAttribute('aria-label', `Remove stop ${idx + 1}`);
+    removeBtn.textContent = '✕';
+    removeBtn.addEventListener('click', () => {
+        removeStopRow(row, idx);
+    });
+
+    row.appendChild(group);
+    row.appendChild(dwellGroup);
+    row.appendChild(removeBtn);
+    container.appendChild(row);
+
+    // Create suggestions dropdown for this stop
+    const suggestions = document.createElement('div');
+    suggestions.id = `stopSuggestions${idx}`;
+    suggestions.className = 'suggestions-dropdown';
+    document.body.appendChild(suggestions);
+
+    // Input → suggestions
+    input.addEventListener('input', async () => {
+        const stopIdx = parseInt(input.dataset.idx, 10);
+        const q = input.value.trim();
+        if (stopItems[stopIdx]) {
+            const sel = getLabelFromItem(stopItems[stopIdx]).trim().toLowerCase();
+            if (q.toLowerCase() !== sel) stopItems[stopIdx] = null;
+        }
+        if (q.length < 3) { clearStopSuggestions(stopIdx); return; }
+        try {
+            const locs = await getPossibleLocations(q);
+            renderStopSuggestions(stopIdx, locs || [], input);
+        } catch (err) {
+            clearStopSuggestions(stopIdx);
+        }
+    });
+
+    // Debounced exact-match lookup
+    input.addEventListener('input', () => {
+        const stopIdx = parseInt(input.dataset.idx, 10);
+        if (stopInputTimers[stopIdx]) clearTimeout(stopInputTimers[stopIdx]);
+        const q = input.value.trim();
+        if (!q) return;
+        showInputLoading(input);
+        stopInputTimers[stopIdx] = setTimeout(async () => {
+            stopInputTimers[stopIdx] = null;
+            hideInputLoading(input);
+            if (!q) return;
+            if (stopItems[stopIdx] && getLabelFromItem(stopItems[stopIdx]).trim().toLowerCase() === q.toLowerCase()) return;
+            try {
+                const locs = await getPossibleLocations(q);
+                if (locs && locs.length) {
+                    const match = locs.find(it => getLabelFromItem(it).trim().toLowerCase() === q.toLowerCase());
+                    if (match) { stopItems[stopIdx] = match; addViaMarker(match, stopIdx); clearStopSuggestions(stopIdx); }
+                }
+            } catch (err) { /* silent */ }
+        }, 2000);
+    });
+
+    input.addEventListener('keydown', (e) => {
+        const stopIdx = parseInt(input.dataset.idx, 10);
+        const sug = document.getElementById(`stopSuggestions${stopIdx}`);
+        if (sug) handleInputKeydown(e, input, sug);
+    });
+
+    // Set this stop as the active map input when focused, so clicking the map fills it
+    input.addEventListener('focus', () => {
+        setActiveMapInput({ type: 'stop', idx: parseInt(input.dataset.idx, 10) });
+    });
+
+    input.focus();
+    refreshAddStopBtn();
+}
+
+function clearStopSuggestions(idx) {
+    const sug = document.getElementById(`stopSuggestions${idx}`);
+    if (!sug) return;
+    sug.innerHTML = '';
+    sug.style.display = 'none';
+}
+
+function renderStopSuggestions(idx, items, inputEl) {
+    clearStopSuggestions(idx);
+    if (!items || items.length === 0) return;
+    const sug = document.getElementById(`stopSuggestions${idx}`);
+    if (!sug) return;
+
+    const list = document.createElement('ul');
+    list.setAttribute('role', 'listbox');
+    list.className = 'suggestions-list';
+    items.slice(0, 5).forEach((it, i) => {
+        const label = getLabelFromItem(it);
+        const li = document.createElement('li');
+        li.className = 'suggestion-item';
+        li.setAttribute('role', 'option');
+        li.setAttribute('data-index', String(i));
+        li.tabIndex = 0;
+        li.textContent = label;
+        li.addEventListener('click', () => {
+            stopItems[idx] = it;
+            addViaMarker(it, idx);
+            if (inputEl) inputEl.value = label;
+            clearStopSuggestions(idx);
+            if (inputEl) inputEl.focus();
+            if (stopInputTimers[idx]) { clearTimeout(stopInputTimers[idx]); stopInputTimers[idx] = null; hideInputLoading(inputEl); }
+        });
+        li.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); li.click(); } });
+        list.appendChild(li);
+    });
+    sug._items = items;
+    sug.appendChild(list);
+
+    // Position below the input
+    const rect = inputEl.getBoundingClientRect();
+    const scrollY = window.scrollY || window.pageYOffset;
+    const scrollX = window.scrollX || window.pageXOffset;
+    sug.style.width = rect.width + 'px';
+    sug.style.left = (rect.left + scrollX) + 'px';
+    sug.style.top = (rect.bottom + scrollY + 6) + 'px';
+    sug.style.display = 'block';
+    sug.dataset.active = '-1';
+}
+
+/**
+ * Remove a stop row and clean up state.
+ */
+function removeStopRow(row, removedIdx) {
+    const container = document.getElementById('stopsContainer');
+    if (!container) return;
+
+    // Remove associated suggestions dropdown
+    const sug = document.getElementById(`stopSuggestions${removedIdx}`);
+    if (sug) sug.remove();
+
+    // Remove the via marker for the removed stop
+    removeViaMarker(removedIdx);
+
+    row.remove();
+
+    // Re-index remaining rows
+    const rows = container.querySelectorAll('.stop-input-row');
+    const newStopItems = [];
+    const newDwellTimes = [];
+    const newViaMarkers = [];
+    rows.forEach((r, newIdx) => {
+        const oldIdx = parseInt(r.dataset.stopIdx, 10);
+        r.dataset.stopIdx = String(newIdx);
+
+        const inp = r.querySelector('.stop-point-input');
+        if (inp) {
+            inp.dataset.idx = String(newIdx);
+            inp.id = `stopPoint${newIdx}`;
+        }
+        // Re-index dwell select
+        const dwellSel = r.querySelector('.stop-dwell-select');
+        if (dwellSel) {
+            dwellSel.dataset.idx = String(newIdx);
+            dwellSel.id = `stopDwell${newIdx}`;
+        }
+        // Re-bind dwell change handler with new index
+        const dwellSelNew = dwellSel ? dwellSel.cloneNode(true) : null;
+        if (dwellSelNew) {
+            dwellSelNew.addEventListener('change', () => {
+                stopDwellTimes[parseInt(dwellSelNew.dataset.idx, 10)] = parseInt(dwellSelNew.value, 10) || 0;
+            });
+            if (dwellSel) dwellSel.replaceWith(dwellSelNew);
+        }
+
+        // Update only the first label (via stop label, not dwell label)
+        const labels = r.querySelectorAll('label');
+        if (labels[0]) { labels[0].textContent = `Via Stop ${newIdx + 1}:`; labels[0].htmlFor = `stopPoint${newIdx}`; }
+        if (labels[1]) { labels[1].htmlFor = `stopDwell${newIdx}`; }
+
+        const removeBtn = r.querySelector('.remove-stop-btn');
+        if (removeBtn) {
+            removeBtn.setAttribute('aria-label', `Remove stop ${newIdx + 1}`);
+            // Re-bind click with new idx
+            const newRemoveBtn = removeBtn.cloneNode(true);
+            newRemoveBtn.addEventListener('click', () => removeStopRow(r, newIdx));
+            removeBtn.replaceWith(newRemoveBtn);
+        }
+
+        // Move old suggestions dropdown ID
+        const oldSug = document.getElementById(`stopSuggestions${oldIdx}`);
+        if (oldSug && oldIdx !== newIdx) { oldSug.id = `stopSuggestions${newIdx}`; }
+
+        newStopItems[newIdx] = stopItems[oldIdx] || null;
+        newDwellTimes[newIdx] = stopDwellTimes[oldIdx] || 0;
+        newViaMarkers[newIdx] = viaMarkers[oldIdx] || null;
+    });
+
+    stopItems.length = 0;
+    stopInputTimers.length = 0;
+    stopDwellTimes.length = 0;
+    newStopItems.forEach((it, i) => { stopItems[i] = it; stopInputTimers[i] = null; stopDwellTimes[i] = newDwellTimes[i] || 0; });
+    viaMarkers.length = 0;
+    newViaMarkers.forEach((m, i) => { viaMarkers[i] = m || null; });
+
+    // If the removed stop was the active map input, clear it
+    if (activeMapInput && activeMapInput.type === 'stop') {
+        setActiveMapInput(null);
+    }
+
+    refreshAddStopBtn();
+}
+
+// Wire up the "Add Stop" button
+document.addEventListener('DOMContentLoaded', () => {
+    const addStopBtn = document.getElementById('addStopBtn');
+    if (addStopBtn) {
+        addStopBtn.addEventListener('click', () => addStopRow());
+    }
+
+    // Close stop suggestions on outside click
+    document.addEventListener('click', (e) => {
+        const inputs = document.querySelectorAll('.stop-point-input');
+        inputs.forEach((inp) => {
+            const idx = parseInt(inp.dataset.idx, 10);
+            const sug = document.getElementById(`stopSuggestions${idx}`);
+            if (sug && !sug.contains(e.target) && e.target !== inp) clearStopSuggestions(idx);
+        });
+    });
+});
+
 // Distinct colours used to distinguish consecutive bus legs on the map.
 const LEG_COLOURS = ['#E74C3C', '#8E44AD', '#2980B9', '#27AE60', '#F39C12', '#16A085', '#D35400', '#2C3E50'];
+
+/**
+ * Scroll to and briefly flash the journey-leg panel entry that corresponds
+ * to the given leg object.  Called when the user clicks a polyline on the map.
+ */
+function highlightLegInPanel(leg) {
+    document.querySelectorAll('.journey-leg').forEach(el => {
+        if (el._leg !== leg) return;
+        // Ensure the parent journey card is expanded so the leg is visible
+        const legsEl = el.closest('.journey-legs');
+        if (legsEl && legsEl.style.display === 'none') {
+            legsEl.style.display = 'block';
+            const card = legsEl.closest('.journey-card');
+            if (card) {
+                const toggleIcon = card.querySelector('.journey-toggle-icon');
+                if (toggleIcon) toggleIcon.textContent = '▼';
+            }
+        }
+        el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        // Restart the CSS animation by removing and re-adding the class
+        el.classList.remove('journey-leg--highlighted');
+        void el.offsetWidth; // force reflow
+        el.classList.add('journey-leg--highlighted');
+    });
+}
 
 async function drawJourneyOnMap(journey) {
     if (!map) return;
     clearRouteLayers();
     routeLayerGroup = L.layerGroup().addTo(map);
+    legToPolylineMap = new Map();
 
     // Collect coordinate promises for legs that reference stop IDs
     const coordCache = {};
@@ -1756,9 +2381,10 @@ async function drawJourneyOnMap(journey) {
             // Prefer waypoints provided by the OTP server (leg.waypoints), then
             // try OpenRouteService, and finally fall back to a straight line.
             const walkStyle = { color: '#3E8EDE', weight: 3, opacity: 0.8, dashArray: '8,6' };
+            let walkPline = null;
             if (leg.waypoints && leg.waypoints.length > 1) {
                 // Use the detailed walking geometry supplied by OTP.
-                L.polyline(leg.waypoints, walkStyle).addTo(routeLayerGroup);
+                walkPline = L.polyline(leg.waypoints, walkStyle).addTo(routeLayerGroup);
             } else {
                 // Fall back to OpenRouteService or a straight line between the
                 // previous bus leg's last stop and the next bus leg's first stop.
@@ -1773,14 +2399,18 @@ async function drawJourneyOnMap(journey) {
                         console.log(`Routing walking leg from ${lastPoint} to ${nextBusCoords}`);
                         const routed = await routeAlongRoad(lastPoint, nextBusCoords, 'walking');
                         if (routed && routed.length) {
-                            L.polyline(routed, walkStyle).addTo(routeLayerGroup);
+                            walkPline = L.polyline(routed, walkStyle).addTo(routeLayerGroup);
                         } else {
-                            L.polyline([lastPoint, nextBusCoords], walkStyle).addTo(routeLayerGroup);
+                            walkPline = L.polyline([lastPoint, nextBusCoords], walkStyle).addTo(routeLayerGroup);
                         }
                     } catch (err) {
-                        L.polyline([lastPoint, nextBusCoords], walkStyle).addTo(routeLayerGroup);
+                        walkPline = L.polyline([lastPoint, nextBusCoords], walkStyle).addTo(routeLayerGroup);
                     }
                 }
+            }
+            if (walkPline) {
+                legToPolylineMap.set(leg, walkPline);
+                walkPline.on('click', () => highlightLegInPanel(leg));
             }
             // don't update lastPoint here; next bus leg will set it
             continue;
@@ -1802,12 +2432,13 @@ async function drawJourneyOnMap(journey) {
             L.circleMarker(b, { radius: 6, color: legColor, fillColor: '#fff', weight: 2 }).addTo(routeLayerGroup).bindPopup(popupB);
         }
         // Draw route for this (non-walking) leg.
-        // Prefer the geometry that OTP itself used for the planned trip
-        // (leg.otp_waypoints) to avoid mismatches with the route_waypoints
-        // table.  Fall back to the API-server waypoints, then a straight line.
+        // Prefer DB-backed geometry returned directly by /journey/plan,
+        // then OTP geometry, then a direct /routes fallback, then straight line.
         if (a && b) {
             let waypoints = null;
-            if (leg.otp_waypoints && leg.otp_waypoints.length > 1) {
+            if (leg.waypoints && leg.waypoints.length > 1) {
+                waypoints = leg.waypoints.map(pt => [pt.lat, pt.lon]);
+            } else if (leg.otp_waypoints && leg.otp_waypoints.length > 1) {
                 waypoints = leg.otp_waypoints;
             } else {
                 waypoints = await fetchRouteWaypoints(
@@ -1816,9 +2447,13 @@ async function drawJourneyOnMap(journey) {
                 );
             }
             if (waypoints && waypoints.length > 1) {
-                L.polyline(waypoints, { color: legColor, weight: 4, opacity: 0.85 }).addTo(routeLayerGroup);
+                const pline = L.polyline(waypoints, { color: legColor, weight: 4, opacity: 0.85 }).addTo(routeLayerGroup);
+                legToPolylineMap.set(leg, pline);
+                pline.on('click', () => highlightLegInPanel(leg));
             } else {
-                L.polyline([a, b], { color: legColor, weight: 4, opacity: 0.85 }).addTo(routeLayerGroup);
+                const pline = L.polyline([a, b], { color: legColor, weight: 4, opacity: 0.85 }).addTo(routeLayerGroup);
+                legToPolylineMap.set(leg, pline);
+                pline.on('click', () => highlightLegInPanel(leg));
             }
             lastPoint = b;
         }
@@ -1833,8 +2468,308 @@ async function drawJourneyOnMap(journey) {
     }
 }
 
+/**
+ * Open a modal showing detailed information about a journey leg.
+ * Displays: operator, route number, direction, and all stops on the route.
+ */
+function openLegDetailsModal(leg, modeLabel, operatorName, routeName) {
+    const t = translations[currentLang] || translations.en;
+
+    // Create overlay backdrop
+    const backdrop = document.createElement('div');
+    backdrop.className = 'leg-modal-backdrop';
+
+    // Create modal
+    const modal = document.createElement('div');
+    modal.className = 'leg-modal';
+
+    // Close button
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'leg-modal-close';
+    closeBtn.setAttribute('aria-label', 'Close');
+    closeBtn.textContent = '×';
+    closeBtn.addEventListener('click', () => {
+        backdrop.remove();
+    });
+
+    const canLoadIntermediateStops = !!(
+        leg.route_id && leg.origin_stop_id && leg.destination_stop_id
+    );
+
+    // Modal header
+    const header = document.createElement('div');
+    header.className = 'leg-modal-header';
+
+    const title = document.createElement('h3');
+    title.textContent = routeName || 'Route Details';
+    header.appendChild(title);
+    header.appendChild(closeBtn);
+
+    // Modal body
+    const body = document.createElement('div');
+    body.className = 'leg-modal-body';
+
+    // Operator
+    if (operatorName) {
+        const operatorSection = document.createElement('div');
+        operatorSection.className = 'leg-modal-section';
+        const operatorLabel = document.createElement('strong');
+        operatorLabel.textContent = 'Operator:';
+        const operatorValue = document.createElement('div');
+        operatorValue.textContent = operatorName;
+        operatorSection.appendChild(operatorLabel);
+        operatorSection.appendChild(operatorValue);
+        body.appendChild(operatorSection);
+    }
+
+    // Direction
+    if (leg.direction) {
+        const directionSection = document.createElement('div');
+        directionSection.className = 'leg-modal-section';
+        const directionLabel = document.createElement('strong');
+        directionLabel.textContent = 'Direction:';
+        const directionValue = document.createElement('div');
+        directionValue.textContent = leg.direction.charAt(0).toUpperCase() + leg.direction.slice(1);
+        directionSection.appendChild(directionLabel);
+        directionSection.appendChild(directionValue);
+        body.appendChild(directionSection);
+    }
+
+    // From and To
+    const fromToSection = document.createElement('div');
+    fromToSection.className = 'leg-modal-section';
+    const fromToLabel = document.createElement('strong');
+    fromToLabel.textContent = 'Journey:';
+    const fromToValue = document.createElement('div');
+    fromToValue.className = 'leg-modal-journey-fromto';
+    const startStopName = document.createElement('div');
+    startStopName.className = 'leg-modal-stop-name';
+    const startStopStrong = document.createElement('strong');
+    startStopStrong.textContent = leg.origin_stop_name || leg.from_stop || leg.origin_stop_id || 'Start';
+    startStopName.appendChild(startStopStrong);
+
+    const journeyArrow = document.createElement('div');
+    journeyArrow.className = 'leg-modal-journey-arrow';
+    journeyArrow.textContent = '↓';
+
+    fromToValue.appendChild(startStopName);
+    fromToValue.appendChild(journeyArrow);
+
+    const intermediateStopsWrap = document.createElement('div');
+    intermediateStopsWrap.className = 'leg-modal-intermediate-wrap';
+    fromToValue.appendChild(intermediateStopsWrap);
+
+    const loadStatus = document.createElement('div');
+    loadStatus.className = 'leg-modal-load-status';
+
+    const normalizeStopId = (value) => String(value || '').trim().toLowerCase();
+    const originIdNorm = normalizeStopId(leg.origin_stop_id);
+    const destinationIdNorm = normalizeStopId(leg.destination_stop_id);
+
+    if (canLoadIntermediateStops) {
+        const inlineLoadWrap = document.createElement('div');
+        inlineLoadWrap.className = 'leg-modal-inline-load-wrap';
+
+        const loadToEndArrow = document.createElement('div');
+        loadToEndArrow.className = 'leg-modal-journey-arrow';
+        loadToEndArrow.textContent = '↓';
+
+        const loadBtn = document.createElement('button');
+        loadBtn.className = 'leg-modal-load-stops-btn';
+        loadBtn.type = 'button';
+        loadBtn.textContent = 'Load Stops';
+
+        const renderStops = (stops) => {
+            intermediateStopsWrap.innerHTML = '';
+
+            if (!Array.isArray(stops) || stops.length === 0) {
+                return;
+            }
+
+            const intermediateStops = stops.filter((s) => {
+                const sid = normalizeStopId(s && s.stop_id);
+                if (!sid) return true;
+                return sid !== originIdNorm && sid !== destinationIdNorm;
+            });
+
+            if (intermediateStops.length === 0) {
+                return;
+            }
+
+            intermediateStops.forEach((s, idx) => {
+                const stopEl = document.createElement('div');
+                stopEl.className = 'leg-modal-stop-name';
+
+                const stopStrong = document.createElement('strong');
+                const name = s.stop_name || s.stop_id || `Stop ${idx + 1}`;
+                const arr = s.arrival_time || '';
+                stopStrong.textContent = arr ? `${name} (${arr})` : name;
+
+                stopEl.appendChild(stopStrong);
+                intermediateStopsWrap.appendChild(stopEl);
+
+                const arrowEl = document.createElement('div');
+                arrowEl.className = 'leg-modal-journey-arrow';
+                arrowEl.textContent = '↓';
+                intermediateStopsWrap.appendChild(arrowEl);
+            });
+        };
+
+        loadBtn.addEventListener('click', async () => {
+            loadBtn.disabled = true;
+            loadBtn.textContent = 'Loading…';
+            loadStatus.textContent = '';
+
+            const payload = await fetchRouteStopsBetween(
+                leg.route_id,
+                leg.direction,
+                leg.origin_stop_id,
+                leg.destination_stop_id,
+                leg.departure_time,
+            );
+
+            if (!payload || !Array.isArray(payload.stops)) {
+                loadStatus.textContent = 'Could not load route stops for this leg.';
+                loadBtn.disabled = false;
+                loadBtn.textContent = 'Load Stops';
+                return;
+            }
+
+            loadStatus.textContent = '';
+            renderStops(payload.stops);
+            inlineLoadWrap.remove();
+            loadToEndArrow.remove();
+        });
+
+        inlineLoadWrap.appendChild(loadBtn);
+        fromToValue.appendChild(inlineLoadWrap);
+        fromToValue.appendChild(loadToEndArrow);
+    }
+
+    const endStopName = document.createElement('div');
+    endStopName.className = 'leg-modal-stop-name';
+    const endStopStrong = document.createElement('strong');
+    endStopStrong.textContent = leg.destination_stop_name || leg.to_stop || leg.destination_stop_id || 'End';
+    endStopName.appendChild(endStopStrong);
+    fromToValue.appendChild(endStopName);
+
+    fromToSection.appendChild(fromToLabel);
+    fromToSection.appendChild(fromToValue);
+    fromToSection.appendChild(loadStatus);
+    body.appendChild(fromToSection);
+
+    // Times
+    if (leg.departure_time || leg.arrival_time) {
+        const timesSection = document.createElement('div');
+        timesSection.className = 'leg-modal-section';
+        const timesLabel = document.createElement('strong');
+        timesLabel.textContent = 'Times:';
+        const timesValue = document.createElement('div');
+        let timesHTML = '';
+        if (leg.departure_time) {
+            timesHTML += `<div>Depart: <span style="color: var(--journey-departs-color); font-weight: 600;">${leg.departure_time}</span></div>`;
+        }
+        if (leg.arrival_time) {
+            timesHTML += `<div>Arrive: <span style="color: var(--journey-arrives-color); font-weight: 600;">${leg.arrival_time}</span></div>`;
+        }
+        timesValue.innerHTML = timesHTML;
+        timesSection.appendChild(timesLabel);
+        timesSection.appendChild(timesValue);
+        body.appendChild(timesSection);
+    }
+
+    // Additional info message
+    const infoMsg = document.createElement('div');
+    infoMsg.className = 'leg-modal-info';
+    infoMsg.textContent = 'Tip: click “Load Stops” to view all calls and times for this leg.';
+    body.appendChild(infoMsg);
+
+    modal.appendChild(header);
+    modal.appendChild(body);
+    backdrop.appendChild(modal);
+    document.body.appendChild(backdrop);
+}
+
+/**
+ * Calculate journey duration in minutes from start and end time strings (HH:MM).
+ * A negative raw difference is treated as an overnight journey crossing midnight.
+ * Returns null for times that appear invalid (e.g., > 24 h difference after correction).
+ */
+function calcJourneyDurationMins(startTime, endTime) {
+    if (!startTime || !endTime) return null;
+    const [sh, sm] = startTime.split(':').map(Number);
+    const [eh, em] = endTime.split(':').map(Number);
+    if (isNaN(sh) || isNaN(sm) || isNaN(eh) || isNaN(em)) return null;
+    let total = (eh * 60 + em) - (sh * 60 + sm);
+    // A negative value most likely means the journey crosses midnight (e.g. departs
+    // 23:50 and arrives 00:30 the next day). Add 24 h to correct for this.
+    if (total < 0) total += 24 * 60;
+    // Guard against implausibly long results that indicate bad data (> 24 h).
+    if (total > 24 * 60) return null;
+    return total;
+}
+
+/**
+ * Format a duration in minutes as a human-readable string (e.g. "1h 25m").
+ */
+function formatJourneyDuration(mins) {
+    if (mins === null || mins < 0) return '';
+    const h = Math.floor(mins / 60);
+    const m = mins % 60;
+    if (h > 0 && m > 0) return `${h}h ${m}m`;
+    if (h > 0) return `${h}h`;
+    return `${m}m`;
+}
+
 function renderJourneyList(journeys, departureDate) {
     const t = translations[currentLang] || translations.en;
+
+    const operatorMap = {
+        SCCU: 'Stagecoach',
+        SCMY: 'Stagecoach',
+        ARCT: 'Archway Travel',
+        BLAC: 'Blackpool Transport',
+        KLCO: 'Kirkby Lonsdale Coach Hire',
+        NUTT: 'Transporta North West',
+        TP: 'TransPennine Express',
+        VT: 'Avanti West Coast',
+        GR: 'London North Eastern Railway',
+        GW: 'Great Western Railway',
+        EM: 'East Midlands Railway',
+        AW: 'Transport for Wales',
+        NT: 'Northern',
+        SR: 'ScotRail',
+        SW: 'South Western Railway',
+        SE: 'Southeastern',
+        SN: 'Southern',
+        XR: 'Elizabeth line',
+    };
+
+    function normalizeOperatorName(raw) {
+        if (!raw) return '';
+        const trimmed = String(raw).trim();
+        if (!trimmed) return '';
+        return operatorMap[trimmed] || trimmed;
+    }
+
+    // Build journey mode sequence (e.g. "Walk → Bus → Train → Walk")
+    function buildModeSequence(legs) {
+        if (!legs || legs.length === 0) return '';
+        const modes = [];
+        for (const leg of legs) {
+            const mode = (leg.mode || 'bus').toLowerCase();
+            if (mode === 'walk') {
+                if (!modes.length || modes[modes.length - 1] !== '🚶') modes.push('🚶');
+            } else if (mode === 'rail' || mode === 'train') {
+                modes.push('🚆');
+            } else if (mode === 'tram') {
+                modes.push('🚋');
+            } else {
+                modes.push('🚌');
+            }
+        }
+        return modes.join(' → ');
+    }
 
     // Format departure date as a human-readable label (e.g. "Tuesday 11 Mar")
     let departureDayLabel = '';
@@ -1853,20 +2788,30 @@ function renderJourneyList(journeys, departureDate) {
         return;
     }
 
-    // Deduplicate journeys: skip if same departure/arrival times and route structure
+    // Deduplicate journeys: keep distinct walking/transit patterns.
+    // Previous logic only keyed by transit legs and could hide itineraries that
+    // differ mainly by walking amount/segments.
     const dedupedJourneys = [];
     const seenKeys = new Set();
     for (const j of journeys) {
-        const busLegs = (j.legs || []).filter(l => (l.mode || 'bus') !== 'walk');
-        const firstLeg = busLegs.length > 0 ? busLegs[0] : null;
-        const lastLeg = busLegs.length > 0 ? busLegs[busLegs.length - 1] : null;
-
-        // Create a unique key based on first departure, last arrival, and route IDs
-        const routeIds = (j.legs || [])
-            .filter(l => (l.mode || 'bus') !== 'walk')
-            .map(l => l.route_id || '')
-            .join('|');
-        const key = `${firstLeg?.departure_time || ''}|${lastLeg?.arrival_time || ''}|${routeIds}`;
+        const legs = j.legs || [];
+        const key = legs.map((l) => {
+            const mode = (l.mode || 'bus').toLowerCase();
+            if (mode === 'walk') {
+                const from = (l.from_stop || l.from || '').trim();
+                const to = (l.to_stop || l.to || '').trim();
+                const dist = Number(l.distance_km || 0).toFixed(3);
+                return `walk:${from}->${to}:${l.departure_time || ''}:${l.arrival_time || ''}:${dist}`;
+            }
+            return [
+                mode,
+                l.route_id || '',
+                l.origin_stop_id || l.origin_stop_name || l.from_stop || '',
+                l.destination_stop_id || l.destination_stop_name || l.to_stop || '',
+                l.departure_time || '',
+                l.arrival_time || '',
+            ].join(':');
+        }).join('|');
 
         if (!seenKeys.has(key)) {
             seenKeys.add(key);
@@ -1874,12 +2819,24 @@ function renderJourneyList(journeys, departureDate) {
         }
     }
 
-    // Build a compact list with clear departure/arrival times and per-leg details
+    // Build a compact list with collapsible journey cards
     const container = document.createElement('div');
     container.className = 'journey-list';
+
+    // Journey results count header
+    const resultsHeader = document.createElement('div');
+    resultsHeader.className = 'journey-results-header';
+    const count = dedupedJourneys.length;
+    resultsHeader.textContent = `${count} ${count === 1 ? 'journey' : 'journeys'} found`;
+    container.appendChild(resultsHeader);
+
+    // Track which journey is currently expanded
+    let expandedJourneyIdx = 0;
+
     dedupedJourneys.forEach((j, idx) => {
         const card = document.createElement('div');
         card.className = 'journey-card';
+        card.dataset.journeyIdx = idx;
 
         // Get all non-walk legs for finding first and last transit stops
         const busLegs = j.legs && j.legs.filter(l => (l.mode || 'bus') !== 'walk') || [];
@@ -1891,9 +2848,22 @@ function renderJourneyList(journeys, departureDate) {
         const firstLeg = allLegs.length > 0 ? allLegs[0] : null;
         const lastLeg = allLegs.length > 0 ? allLegs[allLegs.length - 1] : null;
 
-        // Header: route summary + departure/arrival
+        // Build mode sequence (e.g. "🚶 → 🚌 → 🚆 → 🚶")
+        const modeSequence = buildModeSequence(j.legs || []);
+
+        // Header: clickable collapse/expand toggle
         const header = document.createElement('div');
         header.className = 'journey-card-header';
+        header.style.cursor = 'pointer';
+
+        // Left side: Mode sequence + origin/destination
+        const summarySection = document.createElement('div');
+        summarySection.className = 'journey-summary-section';
+
+        const modeBar = document.createElement('div');
+        modeBar.className = 'journey-mode-sequence';
+        modeBar.textContent = modeSequence;
+        summarySection.appendChild(modeBar);
 
         const summary = document.createElement('div');
         summary.className = 'journey-summary';
@@ -1904,7 +2874,7 @@ function renderJourneyList(journeys, departureDate) {
 
         const arrowEl = document.createElement('div');
         arrowEl.className = 'journey-stop-arrow';
-        arrowEl.textContent = '↓';
+        arrowEl.textContent = '→';
 
         const destEl = document.createElement('div');
         destEl.className = 'journey-stop-name';
@@ -1913,7 +2883,46 @@ function renderJourneyList(journeys, departureDate) {
         summary.appendChild(originEl);
         summary.appendChild(arrowEl);
         summary.appendChild(destEl);
+        summarySection.appendChild(summary);
 
+        // Duration badge
+        const durationMins = calcJourneyDurationMins(
+            firstLeg && firstLeg.departure_time,
+            lastLeg && lastLeg.arrival_time
+        );
+        const durationStr = formatJourneyDuration(durationMins);
+        if (durationStr) {
+            const durationBadge = document.createElement('div');
+            durationBadge.className = 'journey-duration-badge';
+            durationBadge.textContent = `⏱ ${durationStr}`;
+            summarySection.appendChild(durationBadge);
+        }
+
+        // Already-departed warning — shown when the first leg departs before the current time
+        if (firstLeg && firstLeg.departure_time && departureDate) {
+            const [dY, dM, dD] = departureDate.split('-').map(Number);
+            const [tH, tM] = firstLeg.departure_time.split(':').map(Number);
+            if (!isNaN(dY) && !isNaN(tH)) {
+                const depDate = new Date(dY, dM - 1, dD, tH, tM || 0);
+                if (depDate < new Date()) {
+                    const deptBadge = document.createElement('div');
+                    deptBadge.className = 'journey-departed-warning';
+                    deptBadge.textContent = t.alreadyDepartedWarning || '⚠️ This journey has already departed';
+                    summarySection.appendChild(deptBadge);
+                }
+            }
+        }
+
+        // Late-arrival warning badge (for arrive-by searches where target wasn't met)
+        if (j.arrives_late && j.late_by_mins) {
+            const lateBadge = document.createElement('div');
+            lateBadge.className = 'journey-late-warning';
+            const lateTemplate = (t.arrivesLateWarning || '⚠️ Arrives {mins} min after target time');
+            lateBadge.textContent = lateTemplate.replace('{mins}', j.late_by_mins);
+            summarySection.appendChild(lateBadge);
+        }
+
+        // Right side: Times
         const times = document.createElement('div');
         times.className = 'journey-times';
 
@@ -1951,14 +2960,21 @@ function renderJourneyList(journeys, departureDate) {
         times.appendChild(depBlock);
         times.appendChild(arrBlock);
 
-        header.appendChild(summary);
+        // Expand/collapse toggle indicator
+        const toggleIcon = document.createElement('div');
+        toggleIcon.className = 'journey-toggle-icon';
+        toggleIcon.textContent = idx === 0 ? '▼' : '▶';
+
+        header.appendChild(summarySection);
         header.appendChild(times);
+        header.appendChild(toggleIcon);
 
         card.appendChild(header);
 
-        // Per-leg details
+        // Per-leg details (hidden when collapsed)
         const legsEl = document.createElement('div');
         legsEl.className = 'journey-legs';
+        legsEl.style.display = idx === 0 ? 'block' : 'none'; // Show first journey by default
 
         const ul = document.createElement('ul');
         ul.className = 'journey-legs-list';
@@ -1981,6 +2997,21 @@ function renderJourneyList(journeys, departureDate) {
             dedupedLegs.push(leg);
         }
 
+        // Remove short trailing walk legs (< 50 m) that can confuse users
+        while (dedupedLegs.length > 1) {
+            const last = dedupedLegs[dedupedLegs.length - 1];
+            if ((last.mode || 'bus') === 'walk' && typeof last.distance_km === 'number' && last.distance_km < 0.05) {
+                dedupedLegs.pop();
+            } else {
+                break;
+            }
+        }
+
+        const finalTransitDest = lastBusLeg && (lastBusLeg.destination_stop_name || lastBusLeg.to_stop || lastBusLeg.destination_stop_id) || '';
+
+        // Track the transit-leg colour index so the panel colours match the map
+        let legColourIndex = 0;
+
         (dedupedLegs || []).forEach((leg) => {
             const li = document.createElement('li');
             li.className = 'journey-leg';
@@ -1989,21 +3020,24 @@ function renderJourneyList(journeys, departureDate) {
 
                 const walkLabel = document.createElement('span');
                 walkLabel.className = 'journey-leg-walk-label';
-                walkLabel.textContent = `🚶 ${t.walk}: `;
+                walkLabel.textContent = `🚶 ${t.walk}`;
 
                 const walkDetail = document.createElement('span');
                 walkDetail.className = 'journey-leg-walk-detail';
                 walkDetail.textContent = `${leg.from_stop || leg.from || ''} → ${leg.to_stop || leg.to || leg.to_stop || ''}`;
 
-                li.appendChild(walkLabel);
-                li.appendChild(walkDetail);
+                const walkContainer = document.createElement('div');
+                walkContainer.appendChild(walkLabel);
+                walkContainer.appendChild(walkDetail);
 
                 if (leg.distance_km) {
                     const distEl = document.createElement('span');
                     distEl.className = 'journey-leg-walk-distance';
                     distEl.textContent = ` (${leg.distance_km} km)`;
-                    li.appendChild(distEl);
+                    walkDetail.appendChild(distEl);
                 }
+
+                li.appendChild(walkContainer);
 
                 if (leg.departure_time || leg.arrival_time) {
                     const walkTimesDiv = document.createElement('div');
@@ -2029,18 +3063,61 @@ function renderJourneyList(journeys, departureDate) {
                     li.appendChild(walkTimesDiv);
                 }
             } else {
-                const route = leg.route_name ? `${leg.route_name}` : (leg.route_id || 'Route');
+                // Assign the same colour used on the map for this transit leg
+                const legColor = LEG_COLOURS[legColourIndex % LEG_COLOURS.length];
+                legColourIndex++;
+                // Apply the colour to the left border (matching the map polyline)
+                li.style.borderLeftColor = legColor;
 
-                const routeDiv = document.createElement('div');
-                routeDiv.className = 'journey-leg-route';
+                const mode = (leg.mode || 'bus').toLowerCase();
+                const isRail = mode === 'rail' || mode === 'train';
+                const isTram = mode === 'tram';
+                const modeIcon = isRail ? '🚆' : (isTram ? '🚋' : '🚌');
+                const modeLabel = isRail ? t.train : (isTram ? t.tram : t.bus);
+
+                const legDestLabel = leg.destination_stop_name || leg.to_stop || leg.destination_stop_id || '';
+                const serviceDest = isRail
+                    ? (leg.rail_service_destination || finalTransitDest || legDestLabel)
+                    : legDestLabel;
+                const route = isRail
+                    ? `${t.serviceTo} ${serviceDest}`.trim()
+                    : (leg.route_name ? `${leg.route_name}` : (leg.route_id || 'Route'));
+
+                const operatorName = normalizeOperatorName(leg.operator || '');
+
+                // Compact leg header with info button
+                const legHeader = document.createElement('div');
+                legHeader.className = 'journey-leg-header';
+
+                const legRoute = document.createElement('div');
+                legRoute.className = 'journey-leg-route';
                 const routeStrong = document.createElement('strong');
-                routeStrong.textContent = `🚌 ${t.bus} ${route}`;
-                routeDiv.appendChild(routeStrong);
+                // Apply the map colour to the route badge background
+                routeStrong.style.background = legColor;
+                routeStrong.textContent = `${modeIcon} ${modeLabel} ${route}`;
+                legRoute.appendChild(routeStrong);
 
+                // Info button
+                const infoBtn = document.createElement('button');
+                infoBtn.className = 'journey-leg-info-btn';
+                infoBtn.setAttribute('aria-label', `Info for ${route}`);
+                infoBtn.textContent = 'ℹ️';
+                infoBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    openLegDetailsModal(leg, modeLabel, operatorName, route);
+                });
+
+                legHeader.appendChild(legRoute);
+                legHeader.appendChild(infoBtn);
+                li.appendChild(legHeader);
+
+                // Compact stops display
                 const stopsDiv = document.createElement('div');
                 stopsDiv.className = 'journey-leg-stops';
                 stopsDiv.textContent = `${leg.origin_stop_name || leg.from_stop || leg.origin_stop_id || ''} → ${leg.destination_stop_name || leg.to_stop || leg.destination_stop_id || ''}`;
+                li.appendChild(stopsDiv);
 
+                // Times
                 const timesDiv = document.createElement('div');
                 timesDiv.className = 'journey-leg-times';
 
@@ -2063,27 +3140,48 @@ function renderJourneyList(journeys, departureDate) {
                     timesDiv.appendChild(arrSpan);
                 }
 
-                li.appendChild(routeDiv);
-                li.appendChild(stopsDiv);
                 li.appendChild(timesDiv);
             }
+            // Bidirectional hover linking: store leg reference and wire up
+            // mouseenter/mouseleave to widen/restore the map polyline.
+            li._leg = leg;
+            const isWalkLeg = (leg.mode || 'bus') === 'walk';
+            const normalWeight = isWalkLeg ? 3 : 4;
+            const hoverWeight = isWalkLeg ? 5 : 7;
+            li.addEventListener('mouseenter', () => {
+                const pline = legToPolylineMap.get(leg);
+                if (pline) pline.setStyle({ weight: hoverWeight });
+            });
+            li.addEventListener('mouseleave', () => {
+                const pline = legToPolylineMap.get(leg);
+                if (pline) pline.setStyle({ weight: normalWeight });
+            });
             ul.appendChild(li);
         });
         legsEl.appendChild(ul);
         card.appendChild(legsEl);
 
-        const btnRow = document.createElement('div');
-        btnRow.className = 'journey-btn-row';
-        const viewBtn = document.createElement('button');
-        viewBtn.textContent = t.viewOnMap;
-        viewBtn.className = 'plan-route-btn';
-        viewBtn.style.padding = '6px 14px';
-        viewBtn.style.fontSize = '0.95em';
-        viewBtn.style.fontWeight = '500';
-        viewBtn.style.cursor = 'pointer';
-        viewBtn.addEventListener('click', () => drawJourneyOnMap(j));
-        btnRow.appendChild(viewBtn);
-        card.appendChild(btnRow);
+        // Toggle expand/collapse on header click
+        header.addEventListener('click', () => {
+            // Collapse all other journeys
+            document.querySelectorAll('.journey-card').forEach((otherCard) => {
+                const otherLegs = otherCard.querySelector('.journey-legs');
+                const otherToggle = otherCard.querySelector('.journey-toggle-icon');
+                if (otherCard !== card) {
+                    if (otherLegs) otherLegs.style.display = 'none';
+                    if (otherToggle) otherToggle.textContent = '▶';
+                }
+            });
+
+            // Toggle current journey
+            const isExpanded = legsEl.style.display === 'block';
+            legsEl.style.display = isExpanded ? 'none' : 'block';
+            toggleIcon.textContent = isExpanded ? '▶' : '▼';
+
+            if (!isExpanded) {
+                drawJourneyOnMap(j);
+            }
+        });
 
         container.appendChild(card);
     });
@@ -2105,59 +3203,67 @@ planRouteBtn.addEventListener('click', async () => {
     await ensureSelectedFromInput(true);
     await ensureSelectedFromInput(false);
 
-    // Prepare request body using stop_id if available, fallback to coords
-    const body = {};
-    if (selectedStartItem && selectedStartItem.stop_id) {
-        body.origin_stop_id = selectedStartItem.stop_id;
-    } else if (selectedStartItem) {
-        const c = extractLatLng(selectedStartItem);
-        if (c) {
-            body.origin_lat = c[0];
-            body.origin_lon = c[1];
-        }
-    } else if (fromInput.value) {
-        // try to use typed coordinates if present as lat,lon
-        const parts = fromInput.value.split(',').map(s => s.trim());
-        if (parts.length === 2) { body.origin_lat = parseFloat(parts[0]); body.origin_lon = parseFloat(parts[1]); }
+    // Resolve any typed (un-picked) intermediate stop inputs
+    const stopCount = document.querySelectorAll('.stop-input-row').length;
+    for (let i = 0; i < stopCount; i++) {
+        await ensureStopResolved(i);
     }
 
-    if (selectedEndItem && selectedEndItem.stop_id) {
-        body.destination_stop_id = selectedEndItem.stop_id;
-    } else if (selectedEndItem) {
-        const c = extractLatLng(selectedEndItem);
-        if (c) {
-            body.destination_lat = c[0];
-            body.destination_lon = c[1];
+    /**
+     * Build an origin/destination sub-object from a location item.
+     * Returns partial body fields (origin_* or destination_*) with the
+     * given prefix ('origin' or 'destination').
+     */
+    function locationToBodyFields(item, prefix, rawInput) {
+        if (item && item.stop_id) return { [`${prefix}_stop_id`]: item.stop_id };
+        if (item) {
+            const c = extractLatLng(item);
+            if (c) return { [`${prefix}_lat`]: c[0], [`${prefix}_lon`]: c[1] };
         }
-    } else if (toInput.value) {
-        const parts = toInput.value.split(',').map(s => s.trim());
-        if (parts.length === 2) { body.destination_lat = parseFloat(parts[0]); body.destination_lon = parseFloat(parts[1]); }
+        if (rawInput) {
+            const parts = rawInput.split(',').map(s => s.trim());
+            if (parts.length === 2) {
+                const la = parseFloat(parts[0]), lo = parseFloat(parts[1]);
+                if (!isNaN(la) && !isNaN(lo)) return { [`${prefix}_lat`]: la, [`${prefix}_lon`]: lo };
+            }
+        }
+        return null;
     }
 
-    // Add request parameters
-    body.preference = pathfinding;
-    body.walking_speed = walkingSpeed;
-    body.arrive_by = (timeType === 'arrive-before');
-    if (departureTimeInput) {
-        // datetime-local value is "YYYY-MM-DDTHH:MM" — split into date and time
-        const tIdx = departureTimeInput.indexOf('T');
-        if (tIdx !== -1) {
-            body.departure_date = departureTimeInput.slice(0, tIdx);
-            body.departure_time = departureTimeInput.slice(tIdx + 1);
-        } else {
-            body.departure_time = departureTimeInput;
-        }
-    }
+    const originFields = locationToBodyFields(selectedStartItem, 'origin', fromInput && fromInput.value);
+    const destFields = locationToBodyFields(selectedEndItem, 'destination', toInput && toInput.value);
 
     // Basic validation
-    if ((!body.origin_stop_id && (body.origin_lat == null || body.origin_lon == null)) || (!body.destination_stop_id && (body.destination_lat == null || body.destination_lon == null))) {
+    if (!originFields || !destFields) {
         routeContent.innerHTML = `<p class="journey-no-results">${t.selectValidPoints}</p>`;
         return;
     }
 
+    // Collect active stops (only resolved ones)
+    const activeStops = [];
+    for (let i = 0; i < stopCount; i++) {
+        if (stopItems[i]) activeStops.push(stopItems[i]);
+    }
+
+    // Build common request parameters
+    const commonParams = { preference: pathfinding, walking_speed: walkingSpeed, arrive_by: (timeType === 'arrive-before') };
+    if (departureTimeInput) {
+        const tIdx = departureTimeInput.indexOf('T');
+        if (tIdx !== -1) {
+            commonParams.departure_date = departureTimeInput.slice(0, tIdx);
+            commonParams.departure_time = departureTimeInput.slice(tIdx + 1);
+        } else {
+            commonParams.departure_time = departureTimeInput;
+        }
+    }
+
     routeContent.innerHTML = `<p>${t.planningRoute}</p>`;
 
-    try {
+    /**
+     * Call /journey/plan for a single origin→destination pair.
+     */
+    async function planSegment(originF, destinationF) {
+        const body = Object.assign({}, originF, destinationF, commonParams);
         const res = await fetch(`${apiUrl}/journey/plan`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -2167,16 +3273,104 @@ planRouteBtn.addEventListener('click', async () => {
             const txt = await res.text();
             throw new Error(`Server returned ${res.status}: ${txt}`);
         }
-        const data = await res.json();
-        // DEBUG console.log('Journey response received:', JSON.stringify(data, null, 2));
-        // data.journeys is an array
-        renderJourneyList(data.journeys || [], data.departure_date || null);
+        return res.json();
+    }
+
+    try {
+        let allJourneys;
+        let departureDate = null;
+
+        if (activeStops.length === 0) {
+            // Simple point-to-point query (original behaviour)
+            const data = await planSegment(originFields, destFields);
+            allJourneys = data.journeys || [];
+            departureDate = data.departure_date || null;
+
+            // Fetch destination weather and show it
+            fetchAndShowDestinationWeather(selectedEndItem, data.destination);
+        } else {
+            // Multi-leg: chain segments origin → stop[0] → stop[1] → … → dest
+            const waypoints = [
+                { item: selectedStartItem, rawInput: fromInput && fromInput.value },
+                ...activeStops.map(it => ({ item: it, rawInput: null })),
+                { item: selectedEndItem, rawInput: toInput && toInput.value },
+            ];
+
+            // Request journeys for each segment in sequence, taking the best (first) result
+            const segmentJourneys = [];
+            let currentTime = commonParams.departure_time;
+            let currentDate = commonParams.departure_date;
+
+            for (let seg = 0; seg < waypoints.length - 1; seg++) {
+                const from = waypoints[seg];
+                const to = waypoints[seg + 1];
+                const oF = locationToBodyFields(from.item, 'origin', from.rawInput);
+                const dF = locationToBodyFields(to.item, 'destination', to.rawInput);
+                if (!oF || !dF) {
+                    throw new Error(`Could not resolve waypoint between "${getLabelFromItem(from.item) || 'stop'}" and "${getLabelFromItem(to.item) || 'stop'}"`);
+                }
+                const segParams = Object.assign({}, commonParams, { departure_time: currentTime, departure_date: currentDate });
+                const body = Object.assign({}, oF, dF, segParams);
+                const res = await fetch(`${apiUrl}/journey/plan`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body),
+                });
+                if (!res.ok) {
+                    const txt = await res.text();
+                    throw new Error(`Server returned ${res.status}: ${txt}`);
+                }
+                const segData = await res.json();
+                if (!departureDate) departureDate = segData.departure_date || null;
+                const segJourneys = segData.journeys || [];
+                if (segJourneys.length === 0) {
+                    const fromName = getLabelFromItem(from.item) || `waypoint ${seg + 1}`;
+                    const toName = getLabelFromItem(to.item) || `waypoint ${seg + 2}`;
+                    throw new Error(`No routes found between "${fromName}" and "${toName}"`);
+                }
+                const bestSeg = segJourneys[0];
+                segmentJourneys.push(bestSeg);
+
+                // Advance departure time to arrival of this segment (+ 5 min transfer buffer + user dwell time)
+                const segLegs = bestSeg.legs || [];
+                const lastLeg = segLegs[segLegs.length - 1];
+                if (lastLeg && lastLeg.arrival_time) {
+                    // Parse HH:MM, add 5 minutes transfer buffer and any user-specified dwell time
+                    // seg corresponds to waypoints[seg]→waypoints[seg+1]; intermediate stops are
+                    // activeStops[0..activeStops.length-1], so dwell applies when seg < activeStops.length
+                    const dwellMins = (seg < activeStops.length) ? (parseInt(stopDwellTimes[seg], 10) || 0) : 0;
+                    const [hh, mm] = lastLeg.arrival_time.split(':').map(Number);
+                    if (!isNaN(hh) && !isNaN(mm)) {
+                        const totalMins = hh * 60 + mm + 5 + dwellMins;
+                        const nh = Math.floor(totalMins / 60) % 24;
+                        const nm = totalMins % 60;
+                        currentTime = `${String(nh).padStart(2, '0')}:${String(nm).padStart(2, '0')}`;
+                    } else {
+                        currentTime = lastLeg.arrival_time;
+                    }
+                    if (segData.departure_date) currentDate = segData.departure_date;
+                }
+            }
+
+            // Combine all segment legs into one merged journey
+            const mergedLegs = segmentJourneys.flatMap(seg => seg.legs || []);
+            allJourneys = [{ legs: mergedLegs }];
+
+            // Fetch destination weather for the final destination
+            fetchAndShowDestinationWeather(selectedEndItem, null);
+        }
+
+        renderJourneyList(allJourneys, departureDate);
+
         // Auto-collapse planner
         const routePlanner = document.querySelector('.route-planner');
         const plannerToggle = document.getElementById('plannerToggle');
         if (!routePlanner.classList.contains('collapsed')) {
             routePlanner.classList.add('collapsed');
             plannerToggle.setAttribute('aria-expanded', 'false');
+            setTimeout(() => {
+                if (map) map.invalidateSize();
+            }, 320);
         }
     } catch (err) {
         console.error('Plan route error:', err);
@@ -2185,6 +3379,50 @@ planRouteBtn.addEventListener('click', async () => {
         clearRouteLayers();
     }
 });
+
+/**
+ * Fetch weather for the journey destination and inject a badge into the
+ * route-display header.
+ *
+ * @param {object|null} destItem  - The selected destination item (may have lat/lon)
+ * @param {object|null} destData  - The destination object from the API response ({stop_id, name})
+ */
+async function fetchAndShowDestinationWeather(destItem, destData) {
+    // Remove any previous destination weather badge
+    const old = document.getElementById('destWeatherBadge');
+    if (old) old.remove();
+
+    if (typeof fetchWeatherData !== 'function') return;
+
+    let lat = null, lon = null;
+    if (destItem) {
+        const c = extractLatLng(destItem);
+        if (c) { lat = c[0]; lon = c[1]; }
+    }
+    if (lat == null || lon == null) return;
+
+    const data = await fetchWeatherData(lat, lon);
+    if (!data || !data.weather) return;
+
+    const wd = data.weather;
+    const temp = Math.round(wd.main.temp);
+    const icon = wd.weather[0].icon;
+    const desc = wd.weather[0].description;
+    const cityName = (destData && destData.name) || wd.name || '';
+
+    const badge = document.createElement('div');
+    badge.id = 'destWeatherBadge';
+    badge.className = 'journey-dest-weather';
+    badge.title = `Weather at ${cityName || 'destination'}: ${desc}`;
+    badge.innerHTML = `
+        <img src="https://openweathermap.org/img/wn/${icon}.png" alt="${desc}">
+        <span>${temp}°C at ${cityName || 'destination'}</span>
+    `;
+
+    // Insert after the "Route Information" h3
+    const h3 = document.querySelector('.route-display h3');
+    if (h3) h3.insertAdjacentElement('afterend', badge);
+}
 
 // Note: This function will be reimplemented for Leaflet.js in a future update
 /*

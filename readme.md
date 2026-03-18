@@ -66,7 +66,7 @@ PGPASSWORD=transport_dev psql -h localhost -U transport -d transport_db -f scrip
 python -u scripts/ingest_stops.py
 ```
 
-This downloads NaPTAN data and imports ~8,500 bus stops. Takes about 30 seconds.
+This downloads NaPTAN data and imports ~382,000 bus stops. Takes about 30 seconds.
 
 ### 6. Load timetable data
 
@@ -79,7 +79,16 @@ routes, stop sequences, and trip times into the database.  Data is sanitised
 during ingestion (invalid coordinates and malformed times are skipped with
 warnings).
 
-### 7. Export GTFS data for OpenTripPlanner
+### 7. Load rail timetable data (optional)
+
+```bash
+python -u scripts/ingest_rail.py
+```
+
+Ingests National Rail schedules for regional rail routing and inserts rail routes
+and stop times into the database.
+
+### 8. Export GTFS data for OpenTripPlanner
 
 The journey planner uses [OpenTripPlanner (OTP)](https://docs.opentripplanner.org/)
 as its routing engine.  OTP requires data in
@@ -94,7 +103,7 @@ python -u scripts/export_gtfs.py gtfs_export.zip
 This exports a sanitised GTFS ZIP containing `feed_info.txt`, `agency.txt`,
 `stops.txt`, `routes.txt`, `trips.txt`, `stop_times.txt`, and `calendar.txt`.
 
-### 8. Start OpenTripPlanner
+### 9. Start OpenTripPlanner
 
 OTP is a Java application.  Download the latest OTP 2.x JAR from the
 [OTP releases page](https://github.com/opentripplanner/OpenTripPlanner/releases)
@@ -135,7 +144,7 @@ Or add it to a `.env` file in the project root:
 OTP_URL=http://localhost:9090
 ```
 
-### 9. Start the API server
+### 10. Start the API server
 
 ```bash
 uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload
@@ -143,11 +152,11 @@ uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload
 
 API docs available at: http://localhost:8080/docs
 
-### 10. Verify front-end works
+### 11. Verify front-end works
 
 Open `http://localhost:3000` in your browser to view the front-end webpage
 
-### 11. Verify everything works
+### 12. Verify everything works
 
 With both OTP and the API server running, open a second terminal and test:
 
@@ -246,6 +255,7 @@ Run these inside the devcontainer **after** running `init_db.sql`:
 |--------|-------------|
 | `python -u scripts/ingest_stops.py` | Import NaPTAN bus stops (~8,500 stops) |
 | `python -u scripts/ingest_timetables.py` | Import timetable data (with data sanitisation) |
+| `python -u scripts/ingest_rail.py` | Import National Rail schedules for regional rail routing |
 | `python -u scripts/ingest_live_all.py` | Poll live bus positions (runs continuously, Ctrl+C to stop) |
 | `python -u scripts/export_gtfs.py [output.zip]` | Export sanitised GTFS ZIP for OpenTripPlanner |
 | `python -u scripts/test_otp.py [--url http://localhost:9090]` | Standalone OTP connectivity and routing test |

@@ -1,29 +1,68 @@
 // Weather API for North Lancashire
 // Using OpenWeatherMap API - Get your free API key from https://openweathermap.org/api
 
-const WEATHER_CONFIG = {
-    // North Lancashire coordinates (centered around Lancaster)
-    latitude: 53.77838,
-    longitude: -2.71330,
-    city: 'Preston, UK'
+// Fallback coordinates (Lancaster) used when geolocation is unavailable
+const WEATHER_FALLBACK = {
+    latitude: 54.0500,
+    longitude: -2.8000,
 };
 
-// Initialize weather widget on page load
+// Initialize weather widget on page load — request user location first
 document.addEventListener('DOMContentLoaded', () => {
-    fetchWeather();
+    initWeather();
     // Update weather every 30 minutes
-    setInterval(fetchWeather, 30 * 60 * 1000);
+    setInterval(initWeather, 30 * 60 * 1000);
 });
 
 /**
- * Fetch weather data from OpenWeatherMap API
+ * Request user location then fetch weather. Falls back gracefully.
  */
-async function fetchWeather() {
+function initWeather() {
+    if ('geolocation' in navigator) {
+        navigator.geolocation.getCurrentPosition(
+            (position) => {
+                fetchWeatherForCoords(position.coords.latitude, position.coords.longitude);
+            },
+            (error) => {
+                let msg;
+                switch (error.code) {
+                    case error.PERMISSION_DENIED:
+                        msg = 'Location access denied. Showing Lancaster weather.';
+                        break;
+                    case error.POSITION_UNAVAILABLE:
+                        msg = 'Location unavailable. Showing Lancaster weather.';
+                        break;
+                    case error.TIMEOUT:
+                        msg = 'Location request timed out. Showing Lancaster weather.';
+                        break;
+                    default:
+                        msg = 'Location error. Showing Lancaster weather.';
+                }
+                // Show brief error then fall back to default location
+                displayWeatherError(msg);
+                setTimeout(() => {
+                    fetchWeatherForCoords(WEATHER_FALLBACK.latitude, WEATHER_FALLBACK.longitude);
+                }, 2000);
+            },
+            { timeout: 8000, maximumAge: 5 * 60 * 1000 }
+        );
+    } else {
+        // Geolocation not supported — use fallback silently
+        fetchWeatherForCoords(WEATHER_FALLBACK.latitude, WEATHER_FALLBACK.longitude);
+    }
+}
+
+/**
+ * Fetch weather data for the given coordinates via the backend proxy.
+ * @param {number} lat
+ * @param {number} lon
+ */
+async function fetchWeatherForCoords(lat, lon) {
     try {
         // Call local proxy to avoid browser CORS restrictions
-        const apiUrl = `http://localhost:8080/api/v1/weather?lat=${WEATHER_CONFIG.latitude}&lon=${WEATHER_CONFIG.longitude}`;
+        const url = `http://localhost:8080/api/v1/weather?lat=${lat}&lon=${lon}`;
 
-        const response = await fetch(apiUrl);
+        const response = await fetch(url);
 
         if (!response.ok) {
             throw new Error(`Status ${response.status}: ${response.statusText}`);
@@ -34,14 +73,35 @@ async function fetchWeather() {
 
     } catch (error) {
         console.error('Detailed Error:', error);
-        displayWeatherError(`Error: ${error.message}`);
+        displayWeatherError(`Weather unavailable`);
+    }
+}
+
+/**
+ * Fetch weather for given coordinates and return parsed data (used externally).
+ * Returns null on failure.
+ * @param {number} lat
+ * @param {number} lon
+ * @returns {Promise<object|null>}
+ */
+async function fetchWeatherData(lat, lon) {
+    try {
+        const url = `http://localhost:8080/api/v1/weather?lat=${lat}&lon=${lon}`;
+        const response = await fetch(url);
+        if (!response.ok) return null;
+        return await response.json();
+    } catch (error) {
+        console.error('fetchWeatherData error:', error);
+        return null;
     }
 }
 
 /**
  * Display weather data in the widget
+ * @param {object} data - API response object
+ * @param {string} [locationLabel] - Optional label to display (e.g. city name or "Your location")
  */
-function displayWeather(data) {
+function displayWeather(data, locationLabel) {
     const weatherWidget = document.getElementById('weatherWidget');
 
     // Extract weather data from the nested structure
@@ -50,6 +110,7 @@ function displayWeather(data) {
     const description = weatherData.weather[0].description;
     const feelsLike = Math.round(weatherData.main.feels_like);
     const weatherIcon = weatherData.weather[0].icon;
+    const cityName = locationLabel || weatherData.name || '';
 
     weatherWidget.innerHTML = `
         <div class="weather-header">
@@ -57,6 +118,7 @@ function displayWeather(data) {
                  alt="${description}" 
                  class="weather-icon">
             <div class="weather-temp">
+                ${cityName ? `<span class="weather-city">${cityName}</span>` : ''}
                 <span class="temp-value">${temperature}°C</span>
                 <span class="temp-feels">Feels like ${feelsLike}°C</span>
             </div>
