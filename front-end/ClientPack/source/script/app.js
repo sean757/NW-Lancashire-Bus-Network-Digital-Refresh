@@ -604,8 +604,9 @@ function initializeDisruptionsBanner() {
     });
 
     fetchAndRenderDisruptions();
-    // Refresh disruptions every 5 minutes
-    setInterval(fetchAndRenderDisruptions, 5 * 60 * 1000);
+    // Refresh disruptions every 5 minutes; store ID to allow future cleanup
+    const disruptionsRefreshId = setInterval(fetchAndRenderDisruptions, 5 * 60 * 1000);
+    banner.dataset.refreshId = String(disruptionsRefreshId);
 }
 
 async function fetchAndRenderDisruptions() {
@@ -2725,8 +2726,11 @@ function renderJourneyList(journeys, departureDate) {
      */
     function calcDurationMins(depTime, arrTime) {
         if (!depTime || !arrTime) return null;
-        const [dh, dm] = depTime.split(':').map(Number);
-        const [ah, am] = arrTime.split(':').map(Number);
+        const depParts = depTime.split(':');
+        const arrParts = arrTime.split(':');
+        if (depParts.length < 2 || arrParts.length < 2) return null;
+        const [dh, dm] = depParts.map(Number);
+        const [ah, am] = arrParts.map(Number);
         if (isNaN(dh) || isNaN(dm) || isNaN(ah) || isNaN(am)) return null;
         let mins = (ah * 60 + am) - (dh * 60 + dm);
         if (mins < 0) mins += 24 * 60; // handle overnight
