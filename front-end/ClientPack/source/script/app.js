@@ -1373,7 +1373,7 @@ const translations = {
         mapClickNotifyEnd: "End point set. Click 'Plan Route' to continue.",
         mapClickNotifyReset: 'Start point updated. Now double-click your destination on the map.',
         mapClickNotifyStop: 'Via stop set.',
-        stopDwellLabel: 'Stop time (min):'
+        stopDwellLabel: 'Stop time (min):',
         viewDepartures: 'View Departures',
         departuresTitle: 'Departures (next 24 hours)',
         departuresLoading: 'Loading departures…',
@@ -1442,7 +1442,7 @@ const translations = {
         mapClickNotifyEnd: '终点已设置。点击"规划路线"继续。',
         mapClickNotifyReset: '起点已更新。请在地图上双击目的地。',
         mapClickNotifyStop: '途经站点已设置。',
-        stopDwellLabel: '停留时间（分钟）：'
+        stopDwellLabel: '停留时间（分钟）：',
         viewDepartures: '查看发车',
         departuresTitle: '发车信息（未来24小时）',
         departuresLoading: '正在加载发车信息…',
@@ -3029,7 +3029,7 @@ planRouteBtn.addEventListener('click', async () => {
     }
 
     const originFields = locationToBodyFields(selectedStartItem, 'origin', fromInput && fromInput.value);
-    const destFields   = locationToBodyFields(selectedEndItem,   'destination', toInput && toInput.value);
+    const destFields = locationToBodyFields(selectedEndItem, 'destination', toInput && toInput.value);
 
     // Basic validation
     if (!originFields || !destFields) {
@@ -3101,9 +3101,9 @@ planRouteBtn.addEventListener('click', async () => {
 
             for (let seg = 0; seg < waypoints.length - 1; seg++) {
                 const from = waypoints[seg];
-                const to   = waypoints[seg + 1];
+                const to = waypoints[seg + 1];
                 const oF = locationToBodyFields(from.item, 'origin', from.rawInput);
-                const dF = locationToBodyFields(to.item,   'destination', to.rawInput);
+                const dF = locationToBodyFields(to.item, 'destination', to.rawInput);
                 if (!oF || !dF) {
                     throw new Error(`Could not resolve waypoint between "${getLabelFromItem(from.item) || 'stop'}" and "${getLabelFromItem(to.item) || 'stop'}"`);
                 }
@@ -3123,7 +3123,7 @@ planRouteBtn.addEventListener('click', async () => {
                 const segJourneys = segData.journeys || [];
                 if (segJourneys.length === 0) {
                     const fromName = getLabelFromItem(from.item) || `waypoint ${seg + 1}`;
-                    const toName   = getLabelFromItem(to.item)   || `waypoint ${seg + 2}`;
+                    const toName = getLabelFromItem(to.item) || `waypoint ${seg + 2}`;
                     throw new Error(`No routes found between "${fromName}" and "${toName}"`);
                 }
                 const bestSeg = segJourneys[0];
