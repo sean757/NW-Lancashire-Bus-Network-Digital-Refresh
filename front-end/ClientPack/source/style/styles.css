@@ -244,7 +244,7 @@ body {
     max-height: 500px;
     overflow: hidden;
     transition: max-height 0.3s ease, padding 0.3s ease;
-    padding: 25px 30px;
+    padding: 20px 30px;
 }
 
 .route-planner.collapsed .planner-content {
@@ -254,14 +254,16 @@ body {
 
 .planner-row {
     display: flex;
-    gap: 20px;
-    margin-bottom: 15px;
+    gap: 16px;
+    margin-bottom: 16px;
     flex-wrap: wrap;
     align-items: flex-end;
 }
 
 .planner-row:last-child {
     margin-bottom: 0;
+    padding-top: 16px;
+    border-top: 1px solid var(--border-light);
 }
 
 .input-group {
@@ -331,29 +333,32 @@ body {
     padding: 11px 30px;
     border-radius: 4px;
     font-size: 16px;
-    font-weight: 500;
+    font-weight: 600;
     cursor: pointer;
-    transition: background-color 0.3s;
+    transition: background-color 0.3s, box-shadow 0.2s;
     min-width: 150px;
+    letter-spacing: 0.01em;
 }
 
 .plan-route-btn:hover {
     background-color: var(--accent-color-hover);
+    box-shadow: 0 3px 8px rgba(39, 174, 96, 0.3);
 }
 
 /* Intermediate stops UI */
 .stops-add-row {
     display: flex;
-    align-items: center;
+    align-items: flex-end;
 }
 
 .add-stop-btn {
     background: transparent;
     color: var(--primary-color);
-    border: 1px dashed var(--primary-color);
-    padding: 6px 14px;
+    border: 2px solid var(--primary-color);
+    padding: 10px 20px;
     border-radius: 4px;
-    font-size: 13px;
+    font-size: 14px;
+    font-weight: 600;
     cursor: pointer;
     transition: background-color 0.2s, color 0.2s;
     white-space: nowrap;
@@ -436,6 +441,7 @@ body {
     font-size: 12px;
     color: var(--text-muted);
     margin-top: 4px;
+    padding: 4px 14px 0;
 }
 
 .journey-dest-weather img {
@@ -512,31 +518,39 @@ body {
 
 /* Route Display Panel */
 .route-display {
-    flex: 0 0 clamp(280px, 30vw, 420px);
-    width: clamp(280px, 30vw, 420px);
-    min-width: 280px;
+    flex: 0 0 clamp(300px, 32vw, 440px);
+    width: clamp(300px, 32vw, 440px);
+    min-width: 300px;
     height: 100%;
     max-height: 100%;
     position: relative;
     background-color: var(--white);
     border-radius: 8px;
     box-shadow: 0 4px 12px var(--shadow);
-    padding: 20px;
+    padding: 0;
     overflow-y: auto;
 }
 
 .route-display h3 {
-    color: var(--primary-color);
-    margin-bottom: 15px;
-    font-size: 1.125em;
-    border-bottom: 2px solid var(--secondary-color);
-    padding-bottom: 10px;
+    color: var(--white);
+    margin: 0;
+    font-size: 1.05em;
+    font-weight: 700;
+    padding: 14px 18px;
+    background: var(--primary-color);
+    border-radius: 8px 8px 0 0;
+    border-bottom: 3px solid var(--secondary-color);
+    letter-spacing: 0.02em;
+    position: sticky;
+    top: 0;
+    z-index: 1;
 }
 
 .route-content {
     color: var(--text-color);
     line-height: 1.6;
     font-size: 1em;
+    padding: 14px;
 }
 
 .route-content p {
@@ -1431,21 +1445,24 @@ body.map-night-mode #map .leaflet-control-attribution a {
 .journey-list {
     display: flex;
     flex-direction: column;
-    gap: 12px;
+    gap: 10px;
 }
 
 /* Individual journey card */
 .journey-card {
-    padding: 16px;
+    padding: 0;
     background-color: var(--white);
     border: 1px solid var(--border-color);
+    border-top: 3px solid var(--journey-leg-border);
     border-radius: 8px;
-    box-shadow: 0 2px 4px var(--shadow);
-    transition: box-shadow 0.2s;
+    box-shadow: 0 2px 6px var(--shadow);
+    transition: box-shadow 0.2s, border-top-color 0.2s;
+    overflow: hidden;
 }
 
 .journey-card:hover {
-    box-shadow: 0 4px 8px var(--shadow);
+    box-shadow: 0 4px 12px var(--shadow);
+    border-top-color: var(--secondary-color);
 }
 
 /* Card header: clickable collapse/expand toggle */
@@ -1453,15 +1470,15 @@ body.map-night-mode #map .leaflet-control-attribution a {
     display: flex;
     justify-content: space-between;
     align-items: flex-start;
-    margin-bottom: 12px;
-    padding-bottom: 12px;
+    padding: 14px 16px 12px;
     border-bottom: 1px solid var(--border-light);
     cursor: pointer;
     user-select: none;
+    background: linear-gradient(135deg, rgba(46, 80, 144, 0.04), transparent 60%);
 }
 
 .journey-card-header:hover {
-    background-color: rgba(46, 80, 144, 0.03);
+    background: linear-gradient(135deg, rgba(46, 80, 144, 0.08), rgba(46, 80, 144, 0.02) 60%);
 }
 
 /* Summary section with mode sequence */
@@ -1483,16 +1500,16 @@ body.map-night-mode #map .leaflet-control-attribution a {
 }
 
 .journey-stop-name {
-    font-size: 1.08em;
+    font-size: 1em;
     color: var(--journey-stop-color);
     font-weight: 700;
-    line-height: 1.45;
+    line-height: 1.4;
 }
 
 .journey-stop-arrow {
-    font-size: 1em;
+    font-size: 0.9em;
     color: var(--text-muted);
-    margin-top: 0.3em;
+    margin: 0.2em 0;
 }
 
 /* Expand/collapse toggle indicator */
@@ -1546,19 +1563,56 @@ body.map-night-mode #map .leaflet-control-attribution a {
 }
 
 .journey-departs-time {
-    font-size: 1.5em;
+    font-size: 1.35em;
     font-weight: 800;
-    color: var(--journey-departs-color);
-    margin-top: 0.1em;
-    line-height: 1.2;
+    color: var(--white);
+    background: var(--journey-departs-color);
+    padding: 3px 10px;
+    border-radius: 5px;
+    margin-top: 0.2em;
+    line-height: 1.35;
+    display: inline-block;
+    letter-spacing: 0.02em;
 }
 
 .journey-arrives-time {
-    font-size: 1.5em;
+    font-size: 1.35em;
     font-weight: 800;
-    color: var(--journey-arrives-color);
-    margin-top: 0.1em;
-    line-height: 1.2;
+    color: var(--white);
+    background: var(--journey-arrives-color);
+    padding: 3px 10px;
+    border-radius: 5px;
+    margin-top: 0.2em;
+    line-height: 1.35;
+    display: inline-block;
+    letter-spacing: 0.02em;
+}
+
+/* Journey duration badge */
+.journey-duration-badge {
+    display: inline-block;
+    background: var(--background-color);
+    color: var(--text-muted);
+    font-size: 0.82em;
+    font-weight: 700;
+    padding: 2px 9px;
+    border-radius: 10px;
+    border: 1px solid var(--border-color);
+    margin-top: 8px;
+    white-space: nowrap;
+    letter-spacing: 0.02em;
+}
+
+/* Journey results count header */
+.journey-results-header {
+    font-size: 0.88em;
+    font-weight: 700;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-bottom: 10px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border-light);
 }
 
 /* Legs section */
@@ -1566,6 +1620,7 @@ body.map-night-mode #map .leaflet-control-attribution a {
     margin-top: 0;
     font-size: 1em;
     color: var(--text-dimmer);
+    padding: 12px 16px 14px;
 }
 
 .journey-legs-list {
@@ -1611,6 +1666,7 @@ body.map-night-mode #map .leaflet-control-attribution a {
 
 .journey-leg--walk {
     border-left-color: var(--journey-walk-border);
+    background-color: var(--background-color);
 }
 
 .journey-leg-walk-label {
@@ -1635,18 +1691,25 @@ body.map-night-mode #map .leaflet-control-attribution a {
 }
 
 .journey-leg-route strong {
-    font-size: 1.22em;
-    color: var(--journey-stop-color);
+    font-size: 1.1em;
+    color: var(--white);
+    background: var(--journey-leg-border);
+    padding: 2px 8px;
+    border-radius: 4px;
+    display: inline-block;
+    letter-spacing: 0.01em;
 }
 
 .journey-leg-stops {
     color: var(--text-muted);
-    font-size: 1em;
+    font-size: 0.95em;
     line-height: 1.5;
+    margin-top: 0.3em;
 }
 
 .journey-leg-times {
-    margin-top: 0.35em;
+    margin-top: 0.4em;
+    font-size: 0.95em;
 }
 
 .journey-leg-depart {
