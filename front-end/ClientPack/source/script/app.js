@@ -31,6 +31,11 @@ let pendingEndItem = null;
 const MAX_STOPS = 3;
 let stopItems = [];        // array of selected location items (same shape as selectedStartItem)
 let stopInputTimers = [];  // debounce timers for each stop input
+let stopDwellTimes = [];   // dwell time (minutes) for each intermediate stop
+
+// Tracks which location input box is awaiting a map click:
+// null | 'from' | 'to' | { type: 'stop', idx: number }
+let activeMapInput = null;
 
 // Timers for debounced exact-match lookup
 let fromInputTimer = null;
@@ -168,6 +173,10 @@ function updateMapClickHint() {
     }
     hint.style.display = 'block';
     const t = translations[currentLang] || translations.en;
+    if (activeMapInput) {
+        hint.textContent = t.clickHintActiveInput || '🖱️ Click the map to set this location';
+        return;
+    }
     if (!selectedStartItem && !selectedEndItem) {
         hint.textContent = t.clickHintStart;
     } else if (selectedStartItem && !selectedEndItem) {
@@ -473,12 +482,16 @@ window.addEventListener('scroll', () => {
     if (toSuggestions.style.display === 'block') positionToSuggestions();
 }, true);
 fromInput.addEventListener('focus', () => {
+    activeMapInput = 'from';
+    updateMapClickHint();
     if (fromSuggestions.children.length) {
         positionFromSuggestions();
         fromSuggestions.style.display = 'block';
     }
 });
 toInput.addEventListener('focus', () => {
+    activeMapInput = 'to';
+    updateMapClickHint();
     if (toSuggestions.children.length) {
         positionToSuggestions();
         toSuggestions.style.display = 'block';
@@ -653,11 +666,45 @@ function initializeLeafletMap() {
     clickHintControl.addTo(map);
     updateMapClickHint();
 
+    // Handle map single click: if a location input is focused and awaiting a map
+    // click, fill it with the clicked coordinates and clear the active state.
+    map.on('click', (e) => {
+        if (!activeMapInput) return;
+        const item = makeCustomItem(e.latlng);
+        const label = getLabelFromItem(item);
+        const t = translations[currentLang] || translations.en;
+        if (activeMapInput === 'from') {
+            if (fromInputTimer) { clearTimeout(fromInputTimer); fromInputTimer = null; }
+            fromInput.value = label;
+            clearFromSuggestions();
+            addStartMarker(item);
+            showNotification(t.mapClickNotifyStart);
+        } else if (activeMapInput === 'to') {
+            if (toInputTimer) { clearTimeout(toInputTimer); toInputTimer = null; }
+            toInput.value = label;
+            clearToSuggestions();
+            addEndMarker(item);
+            showNotification(t.mapClickNotifyEnd);
+        } else if (activeMapInput && activeMapInput.type === 'stop') {
+            const idx = activeMapInput.idx;
+            stopItems[idx] = item;
+            const inp = document.querySelector(`.stop-point-input[data-idx="${idx}"]`);
+            if (inp) inp.value = label;
+            clearStopSuggestions(idx);
+            showNotification(t.mapClickNotifyStop || 'Via stop set.');
+        }
+        activeMapInput = null;
+        updateMapClickHint();
+    });
+
     // Handle map double-clicks for start / end point selection.
     // 1st double-click  → set start point
     // 2nd double-click  → set end point
     // 3rd+ double-click → reset start (clear existing end) so the user can pick a new route
     map.on('dblclick', (e) => {
+        // If an input is awaiting a map click, the single-click handler above
+        // already handled it — ignore the double-click here.
+        if (activeMapInput) return;
         const item = makeCustomItem(e.latlng);
         const label = getLabelFromItem(item);
         const t = translations[currentLang] || translations.en;
@@ -1321,9 +1368,12 @@ const translations = {
         clickHintStart: '🖱️ Double-click the map to set your start point',
         clickHintEnd: '🖱️ Double-click the map to set your end point',
         clickHintReset: '🖱️ Double-click the map to change your start point',
+        clickHintActiveInput: '🖱️ Click the map to set this location',
         mapClickNotifyStart: 'Start point set. Now double-click your destination on the map.',
         mapClickNotifyEnd: "End point set. Click 'Plan Route' to continue.",
         mapClickNotifyReset: 'Start point updated. Now double-click your destination on the map.',
+        mapClickNotifyStop: 'Via stop set.',
+        stopDwellLabel: 'Stop time (min):'
         viewDepartures: 'View Departures',
         departuresTitle: 'Departures (next 24 hours)',
         departuresLoading: 'Loading departures…',
@@ -1387,9 +1437,12 @@ const translations = {
         clickHintStart: '🖱️ 双击地图设置起点',
         clickHintEnd: '🖱️ 双击地图设置终点',
         clickHintReset: '🖱️ 双击地图更改起点',
+        clickHintActiveInput: '🖱️ 点击地图设置此位置',
         mapClickNotifyStart: '起点已设置。请在地图上双击目的地。',
         mapClickNotifyEnd: '终点已设置。点击"规划路线"继续。',
         mapClickNotifyReset: '起点已更新。请在地图上双击目的地。',
+        mapClickNotifyStop: '途经站点已设置。',
+        stopDwellLabel: '停留时间（分钟）：'
         viewDepartures: '查看发车',
         departuresTitle: '发车信息（未来24小时）',
         departuresLoading: '正在加载发车信息…',
@@ -1927,6 +1980,7 @@ function addStopRow() {
     const idx = currentCount; // 0-based index for this stop
     stopItems[idx] = null;
     stopInputTimers[idx] = null;
+    stopDwellTimes[idx] = 0;
 
     // Create row wrapper
     const row = document.createElement('div');
@@ -1951,6 +2005,36 @@ function addStopRow() {
     group.appendChild(label);
     group.appendChild(input);
 
+    // Dwell time group
+    const dwellGroup = document.createElement('div');
+    dwellGroup.className = 'input-group stop-dwell-group';
+
+    const dwellLabel = document.createElement('label');
+    const tNow = translations[currentLang] || translations.en;
+    dwellLabel.textContent = tNow.stopDwellLabel || 'Stop time (min):';
+    dwellLabel.htmlFor = `stopDwell${idx}`;
+
+    const dwellSelect = document.createElement('select');
+    dwellSelect.id = `stopDwell${idx}`;
+    dwellSelect.className = 'stop-dwell-select';
+    dwellSelect.dataset.idx = String(idx);
+    dwellSelect.setAttribute('aria-label', `Stop time in minutes for via stop ${idx + 1}`);
+    // Options: 0 to 120 minutes in 5-minute increments
+    for (let min = 0; min <= 120; min += 5) {
+        const opt = document.createElement('option');
+        opt.value = String(min);
+        opt.textContent = min === 0 ? '0 (no wait)' : String(min);
+        dwellSelect.appendChild(opt);
+    }
+    dwellSelect.value = '0';
+    dwellSelect.addEventListener('change', () => {
+        const dIdx = parseInt(dwellSelect.dataset.idx, 10);
+        stopDwellTimes[dIdx] = parseInt(dwellSelect.value, 10) || 0;
+    });
+
+    dwellGroup.appendChild(dwellLabel);
+    dwellGroup.appendChild(dwellSelect);
+
     // Remove button
     const removeBtn = document.createElement('button');
     removeBtn.type = 'button';
@@ -1962,6 +2046,7 @@ function addStopRow() {
     });
 
     row.appendChild(group);
+    row.appendChild(dwellGroup);
     row.appendChild(removeBtn);
     container.appendChild(row);
 
@@ -2014,6 +2099,12 @@ function addStopRow() {
         const stopIdx = parseInt(input.dataset.idx, 10);
         const sug = document.getElementById(`stopSuggestions${stopIdx}`);
         if (sug) handleInputKeydown(e, input, sug);
+    });
+
+    // Set this stop as the active map input when focused, so clicking the map fills it
+    input.addEventListener('focus', () => {
+        activeMapInput = { type: 'stop', idx: parseInt(input.dataset.idx, 10) };
+        updateMapClickHint();
     });
 
     input.focus();
@@ -2084,7 +2175,7 @@ function removeStopRow(row, removedIdx) {
     // Re-index remaining rows
     const rows = container.querySelectorAll('.stop-input-row');
     const newStopItems = [];
-    const newTimers = [];
+    const newDwellTimes = [];
     rows.forEach((r, newIdx) => {
         const oldIdx = parseInt(r.dataset.stopIdx, 10);
         r.dataset.stopIdx = String(newIdx);
@@ -2094,8 +2185,25 @@ function removeStopRow(row, removedIdx) {
             inp.dataset.idx = String(newIdx);
             inp.id = `stopPoint${newIdx}`;
         }
-        const lbl = r.querySelector('label');
-        if (lbl) { lbl.textContent = `Via Stop ${newIdx + 1}:`; lbl.htmlFor = `stopPoint${newIdx}`; }
+        // Re-index dwell select
+        const dwellSel = r.querySelector('.stop-dwell-select');
+        if (dwellSel) {
+            dwellSel.dataset.idx = String(newIdx);
+            dwellSel.id = `stopDwell${newIdx}`;
+        }
+        // Re-bind dwell change handler with new index
+        const dwellSelNew = dwellSel ? dwellSel.cloneNode(true) : null;
+        if (dwellSelNew) {
+            dwellSelNew.addEventListener('change', () => {
+                stopDwellTimes[parseInt(dwellSelNew.dataset.idx, 10)] = parseInt(dwellSelNew.value, 10) || 0;
+            });
+            if (dwellSel) dwellSel.replaceWith(dwellSelNew);
+        }
+
+        // Update only the first label (via stop label, not dwell label)
+        const labels = r.querySelectorAll('label');
+        if (labels[0]) { labels[0].textContent = `Via Stop ${newIdx + 1}:`; labels[0].htmlFor = `stopPoint${newIdx}`; }
+        if (labels[1]) { labels[1].htmlFor = `stopDwell${newIdx}`; }
 
         const removeBtn = r.querySelector('.remove-stop-btn');
         if (removeBtn) {
@@ -2111,12 +2219,19 @@ function removeStopRow(row, removedIdx) {
         if (oldSug && oldIdx !== newIdx) { oldSug.id = `stopSuggestions${newIdx}`; }
 
         newStopItems[newIdx] = stopItems[oldIdx] || null;
-        newTimers[newIdx] = null;
+        newDwellTimes[newIdx] = stopDwellTimes[oldIdx] || 0;
     });
 
     stopItems.length = 0;
     stopInputTimers.length = 0;
-    newStopItems.forEach((it, i) => { stopItems[i] = it; stopInputTimers[i] = null; });
+    stopDwellTimes.length = 0;
+    newStopItems.forEach((it, i) => { stopItems[i] = it; stopInputTimers[i] = null; stopDwellTimes[i] = newDwellTimes[i] || 0; });
+
+    // If the removed stop was the active map input, clear it
+    if (activeMapInput && activeMapInput.type === 'stop') {
+        activeMapInput = null;
+        updateMapClickHint();
+    }
 
     refreshAddStopBtn();
 }
@@ -3014,14 +3129,17 @@ planRouteBtn.addEventListener('click', async () => {
                 const bestSeg = segJourneys[0];
                 segmentJourneys.push(bestSeg);
 
-                // Advance departure time to arrival of this segment (+ 5 min transfer buffer)
+                // Advance departure time to arrival of this segment (+ 5 min transfer buffer + user dwell time)
                 const segLegs = bestSeg.legs || [];
                 const lastLeg = segLegs[segLegs.length - 1];
                 if (lastLeg && lastLeg.arrival_time) {
-                    // Parse HH:MM, add 5 minutes transfer buffer
+                    // Parse HH:MM, add 5 minutes transfer buffer and any user-specified dwell time
+                    // seg corresponds to waypoints[seg]→waypoints[seg+1]; intermediate stops are
+                    // activeStops[0..activeStops.length-1], so dwell applies when seg < activeStops.length
+                    const dwellMins = (seg < activeStops.length) ? (parseInt(stopDwellTimes[seg], 10) || 0) : 0;
                     const [hh, mm] = lastLeg.arrival_time.split(':').map(Number);
                     if (!isNaN(hh) && !isNaN(mm)) {
-                        const totalMins = hh * 60 + mm + 5;
+                        const totalMins = hh * 60 + mm + 5 + dwellMins;
                         const nh = Math.floor(totalMins / 60) % 24;
                         const nm = totalMins % 60;
                         currentTime = `${String(nh).padStart(2, '0')}:${String(nm).padStart(2, '0')}`;

@@ -410,6 +410,24 @@ body {
     color: var(--white);
 }
 
+/* Stop dwell time selector inside intermediate stop rows */
+.stop-dwell-group {
+    flex: 0 0 auto;
+    min-width: 110px;
+    max-width: 140px;
+}
+
+.stop-dwell-select {
+    width: 100%;
+    padding: 8px 6px;
+    border: 2px solid var(--border-color);
+    border-radius: 4px;
+    font-size: 13px;
+    background-color: var(--white);
+    color: var(--text-color);
+    cursor: pointer;
+}
+
 /* Destination weather badge in journey results */
 .journey-dest-weather {
     display: inline-flex;
@@ -841,7 +859,7 @@ body.high-contrast .input-group select {
     position: absolute;
     bottom: 10px;
     left: 10px;
-    width: 130px;
+    width: 200px;
     background-color: var(--white);
     border-radius: 8px;
     box-shadow: 0 4px 12px var(--shadow);
@@ -886,7 +904,7 @@ body.high-contrast .input-group select {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    max-width: 70px;
+    max-width: 120px;
 }
 
 .temp-value {
@@ -1030,7 +1048,7 @@ body.high-contrast .input-group select {
     }
 
     .weather-widget {
-        width: 120px;
+        width: 185px;
         padding: 8px;
     }
 
@@ -1079,7 +1097,7 @@ body.high-contrast .input-group select {
     }
 
     .weather-widget {
-        width: 108px;
+        width: 170px;
         padding: 6px;
     }
 
