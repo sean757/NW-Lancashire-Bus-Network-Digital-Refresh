@@ -2598,6 +2598,31 @@ function openLegDetailsModal(leg, modeLabel, operatorName, routeName) {
     document.body.appendChild(backdrop);
 }
 
+/**
+ * Calculate journey duration in minutes from start and end time strings (HH:MM).
+ */
+function calcJourneyDurationMins(startTime, endTime) {
+    if (!startTime || !endTime) return null;
+    const [sh, sm] = startTime.split(':').map(Number);
+    const [eh, em] = endTime.split(':').map(Number);
+    if (isNaN(sh) || isNaN(sm) || isNaN(eh) || isNaN(em)) return null;
+    let total = (eh * 60 + em) - (sh * 60 + sm);
+    if (total < 0) total += 24 * 60; // overnight journey
+    return total;
+}
+
+/**
+ * Format a duration in minutes as a human-readable string (e.g. "1h 25m").
+ */
+function formatJourneyDuration(mins) {
+    if (mins === null || mins < 0) return '';
+    const h = Math.floor(mins / 60);
+    const m = mins % 60;
+    if (h > 0 && m > 0) return `${h}h ${m}m`;
+    if (h > 0) return `${h}h`;
+    return `${m}m`;
+}
+
 function renderJourneyList(journeys, departureDate) {
     const t = translations[currentLang] || translations.en;
 
@@ -2700,6 +2725,13 @@ function renderJourneyList(journeys, departureDate) {
     const container = document.createElement('div');
     container.className = 'journey-list';
 
+    // Journey results count header
+    const resultsHeader = document.createElement('div');
+    resultsHeader.className = 'journey-results-header';
+    const count = dedupedJourneys.length;
+    resultsHeader.textContent = `${count} ${count === 1 ? 'journey' : 'journeys'} found`;
+    container.appendChild(resultsHeader);
+
     // Track which journey is currently expanded
     let expandedJourneyIdx = 0;
 
@@ -2754,6 +2786,19 @@ function renderJourneyList(journeys, departureDate) {
         summary.appendChild(arrowEl);
         summary.appendChild(destEl);
         summarySection.appendChild(summary);
+
+        // Duration badge
+        const durationMins = calcJourneyDurationMins(
+            firstLeg && firstLeg.departure_time,
+            lastLeg && lastLeg.arrival_time
+        );
+        const durationStr = formatJourneyDuration(durationMins);
+        if (durationStr) {
+            const durationBadge = document.createElement('div');
+            durationBadge.className = 'journey-duration-badge';
+            durationBadge.textContent = `⏱ ${durationStr}`;
+            summarySection.appendChild(durationBadge);
+        }
 
         // Right side: Times
         const times = document.createElement('div');
