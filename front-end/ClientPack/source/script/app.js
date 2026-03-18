@@ -567,6 +567,7 @@ document.addEventListener('DOMContentLoaded', () => {
     loadUiSettings();
     initializeLeafletMap();
     initializePlannerToggle();
+    initializeDisruptionsBanner();
 
     // Set datetime-local input constraint: max = now + 7 days
     const dtInput = document.getElementById('departureTime');
@@ -579,6 +580,94 @@ document.addEventListener('DOMContentLoaded', () => {
         dtInput.max = toLocalDTString(maxDate);
     }
 });
+
+/**
+ * Initialise the service disruptions banner.
+ * Fetches active disruptions from the backend and populates the banner.
+ * The banner remains hidden when there are no active disruptions.
+ */
+function initializeDisruptionsBanner() {
+    const banner = document.getElementById('disruptionsBanner');
+    const toggleBtn = document.getElementById('disruptionsBannerToggle');
+    const body = document.getElementById('disruptionsBannerBody');
+    if (!banner || !toggleBtn || !body) return;
+
+    toggleBtn.addEventListener('click', () => {
+        const expanded = banner.dataset.expanded === 'true';
+        banner.dataset.expanded = String(!expanded);
+        toggleBtn.setAttribute('aria-expanded', String(!expanded));
+        if (expanded) {
+            body.hidden = true;
+        } else {
+            body.hidden = false;
+        }
+    });
+
+    fetchAndRenderDisruptions();
+    // Refresh disruptions every 5 minutes; store ID to allow future cleanup
+    const disruptionsRefreshId = setInterval(fetchAndRenderDisruptions, 5 * 60 * 1000);
+    banner.dataset.refreshId = String(disruptionsRefreshId);
+}
+
+async function fetchAndRenderDisruptions() {
+    const banner = document.getElementById('disruptionsBanner');
+    const list = document.getElementById('disruptionsList');
+    const titleEl = document.getElementById('disruptionsBannerTitle');
+    if (!banner || !list) return;
+
+    try {
+        const res = await fetch(`${apiUrl}/disruptions/active`);
+        if (!res.ok) return;
+        const disruptions = await res.json();
+        if (!Array.isArray(disruptions) || disruptions.length === 0) {
+            banner.hidden = true;
+            return;
+        }
+
+        list.innerHTML = '';
+        disruptions.forEach((d) => {
+            const severity = (d.severity || 'minor').toLowerCase();
+            const li = document.createElement('li');
+            li.className = `disruptions-item disruptions-item--${severity}`;
+            li.setAttribute('role', 'listitem');
+
+            const badge = document.createElement('span');
+            badge.className = 'disruptions-item__badge';
+            badge.textContent = severity.charAt(0).toUpperCase() + severity.slice(1);
+
+            const text = document.createElement('div');
+            text.className = 'disruptions-item__text';
+
+            if (d.route_name || d.route_id) {
+                const route = document.createElement('div');
+                route.className = 'disruptions-item__route';
+                route.textContent = d.route_name || `Route ${d.route_id}`;
+                text.appendChild(route);
+            }
+
+            const desc = document.createElement('div');
+            desc.className = 'disruptions-item__desc';
+            desc.textContent = d.description || d.disruption_type || 'Service disruption in effect';
+            text.appendChild(desc);
+
+            li.appendChild(badge);
+            li.appendChild(text);
+            list.appendChild(li);
+        });
+
+        const t = translations[currentLang] || translations.en;
+        const count = disruptions.length;
+        const severe = disruptions.filter(d => (d.severity || '').toLowerCase() === 'severe').length;
+        if (titleEl) {
+            titleEl.textContent = (t.disruptionsBannerTitle || 'Service Disruptions') +
+                ` (${count}${severe > 0 ? ` · ${severe} severe` : ''})`;
+        }
+        banner.hidden = false;
+    } catch (err) {
+        console.warn('Could not load disruptions:', err);
+    }
+}
+
 
 
 function initializeLeafletMap() {
@@ -1379,7 +1468,8 @@ const translations = {
         departuresLoading: 'Loading departures…',
         departuresNone: 'No scheduled departures found in the next 24 hours.',
         departuresError: 'Could not load departures for this stop.',
-        departuresToPrefix: 'To'
+        departuresToPrefix: 'To',
+        disruptionsBannerTitle: 'Service Disruptions',
     },
     zh: {
         header: '兰开夏郡旅程规划',
@@ -1448,7 +1538,8 @@ const translations = {
         departuresLoading: '正在加载发车信息…',
         departuresNone: '未来24小时内没有计划发车。',
         departuresError: '无法加载该站点的发车信息。',
-        departuresToPrefix: '开往'
+        departuresToPrefix: '开往',
+        disruptionsBannerTitle: '服务中断',
     }
 };
 
@@ -2629,6 +2720,34 @@ function renderJourneyList(journeys, departureDate) {
         return operatorMap[trimmed] || trimmed;
     }
 
+    /**
+     * Calculate journey duration in minutes from HH:MM departure and arrival.
+     * Returns null if times cannot be parsed.
+     */
+    function calcDurationMins(depTime, arrTime) {
+        if (!depTime || !arrTime) return null;
+        const depParts = depTime.split(':');
+        const arrParts = arrTime.split(':');
+        if (depParts.length < 2 || arrParts.length < 2) return null;
+        const [dh, dm] = depParts.map(Number);
+        const [ah, am] = arrParts.map(Number);
+        if (isNaN(dh) || isNaN(dm) || isNaN(ah) || isNaN(am)) return null;
+        let mins = (ah * 60 + am) - (dh * 60 + dm);
+        if (mins < 0) mins += 24 * 60; // handle overnight
+        return mins;
+    }
+
+    /**
+     * Format a duration given in minutes as "X hr Y min" or "Y min".
+     */
+    function formatDuration(mins) {
+        if (mins == null || isNaN(mins)) return '';
+        if (mins < 60) return `${mins} min`;
+        const h = Math.floor(mins / 60);
+        const m = mins % 60;
+        return m > 0 ? `${h} hr ${m} min` : `${h} hr`;
+    }
+
     // Build journey mode sequence (e.g. "Walk → Bus → Train → Walk")
     function buildModeSequence(legs) {
         if (!legs || legs.length === 0) return '';
@@ -2724,7 +2843,6 @@ function renderJourneyList(journeys, departureDate) {
         // Header: clickable collapse/expand toggle
         const header = document.createElement('div');
         header.className = 'journey-card-header';
-        header.style.cursor = 'pointer';
 
         // Left side: Mode sequence + origin/destination
         const summarySection = document.createElement('div');
@@ -2792,6 +2910,18 @@ function renderJourneyList(journeys, departureDate) {
 
         times.appendChild(depBlock);
         times.appendChild(arrBlock);
+
+        // Duration badge
+        const durationMins = calcDurationMins(
+            firstLeg && firstLeg.departure_time,
+            lastLeg && lastLeg.arrival_time
+        );
+        if (durationMins !== null) {
+            const durationEl = document.createElement('div');
+            durationEl.className = 'journey-duration';
+            durationEl.textContent = `⏱ ${formatDuration(durationMins)}`;
+            times.appendChild(durationEl);
+        }
 
         // Expand/collapse toggle indicator
         const toggleIcon = document.createElement('div');
@@ -2957,6 +3087,26 @@ function renderJourneyList(journeys, departureDate) {
             ul.appendChild(li);
         });
         legsEl.appendChild(ul);
+
+        // "View on Map" button row
+        const btnRow = document.createElement('div');
+        btnRow.className = 'journey-btn-row';
+        const viewOnMapBtn = document.createElement('button');
+        viewOnMapBtn.className = 'journey-view-map-btn';
+        viewOnMapBtn.setAttribute('aria-label', `View journey ${idx + 1} on map`);
+        viewOnMapBtn.textContent = t.viewOnMap || '🗺️ View on Map';
+        viewOnMapBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            drawJourneyOnMap(j);
+            // Expand this card if collapsed
+            if (legsEl.style.display !== 'block') {
+                legsEl.style.display = 'block';
+                toggleIcon.textContent = '▼';
+            }
+        });
+        btnRow.appendChild(viewOnMapBtn);
+        legsEl.appendChild(btnRow);
+
         card.appendChild(legsEl);
 
         // Toggle expand/collapse on header click
