@@ -2678,6 +2678,27 @@ function openLegDetailsModal(leg, modeLabel, operatorName, routeName) {
         body.appendChild(timesSection);
     }
 
+    // Live delay information section
+    if (leg.delay_source) {
+        const delaySection = document.createElement('div');
+        delaySection.className = 'leg-modal-section';
+        const delayLabel = document.createElement('strong');
+        delayLabel.textContent = 'Live Status:';
+        const delayValue = document.createElement('div');
+
+        if (leg.estimated_delay_mins != null && leg.estimated_delay_mins > 0) {
+            delayValue.innerHTML = `<span class="journey-leg-delay-badge">⚠️ Estimated ~${leg.estimated_delay_mins} min delay</span>`;
+        } else if (leg.estimated_delay_mins === 0 && leg.delay_source === 'live_position') {
+            delayValue.innerHTML = `<span class="journey-leg-ontime-badge">✅ On time (live data)</span>`;
+        } else {
+            delayValue.innerHTML = `<span class="journey-leg-schedule-badge">📅 Scheduled times (no live data available)</span>`;
+        }
+
+        delaySection.appendChild(delayLabel);
+        delaySection.appendChild(delayValue);
+        body.appendChild(delaySection);
+    }
+
     // Additional info message
     const infoMsg = document.createElement('div');
     infoMsg.className = 'leg-modal-info';
@@ -3138,6 +3159,27 @@ function renderJourneyList(journeys, departureDate) {
                     arrSpan.className = 'journey-leg-arrive';
                     arrSpan.textContent = leg.arrival_time;
                     timesDiv.appendChild(arrSpan);
+                }
+
+                // Live delay badge
+                if (leg.estimated_delay_mins != null && leg.estimated_delay_mins > 0) {
+                    const delayBadge = document.createElement('span');
+                    delayBadge.className = 'journey-leg-delay-badge';
+                    delayBadge.textContent = `⚠️ ~${leg.estimated_delay_mins} min delay`;
+                    delayBadge.title = 'Estimated from live vehicle position data';
+                    timesDiv.appendChild(delayBadge);
+                } else if (leg.estimated_delay_mins === 0 && leg.delay_source === 'live_position') {
+                    const onTimeBadge = document.createElement('span');
+                    onTimeBadge.className = 'journey-leg-ontime-badge';
+                    onTimeBadge.textContent = '✅ On time';
+                    onTimeBadge.title = 'Vehicle is on schedule based on live position';
+                    timesDiv.appendChild(onTimeBadge);
+                } else if (leg.delay_source === 'schedule') {
+                    const schedBadge = document.createElement('span');
+                    schedBadge.className = 'journey-leg-schedule-badge';
+                    schedBadge.textContent = '📅 Scheduled';
+                    schedBadge.title = 'No live data available — times are from the timetable';
+                    timesDiv.appendChild(schedBadge);
                 }
 
                 li.appendChild(timesDiv);

@@ -98,6 +98,7 @@ CREATE TABLE IF NOT EXISTS live_positions (
 CREATE INDEX IF NOT EXISTS idx_live_positions_vehicle ON live_positions(vehicle_id);
 CREATE INDEX IF NOT EXISTS idx_live_positions_route ON live_positions(route_id);
 CREATE INDEX IF NOT EXISTS idx_live_positions_time ON live_positions(received_at);
+CREATE INDEX IF NOT EXISTS idx_live_positions_route_time ON live_positions(route_id, received_at DESC);
 
 -- Keep only recent positions (partition or cleanup via cron)
 -- Recommended: DELETE FROM live_positions WHERE received_at < NOW() - INTERVAL '24 hours'

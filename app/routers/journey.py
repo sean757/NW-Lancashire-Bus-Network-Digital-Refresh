@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.services import otp_client
 from app.services.route_cache import route_cache
+from app.services.delay_estimator import estimate_leg_delay
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -368,6 +369,48 @@ async def plan_journey(req: JourneyRequest, db: AsyncSession = Depends(get_db)):
                     dest_name = rail_dest_map.get(dest_code)
                     if dest_name:
                         leg["rail_service_destination"] = dest_name
+
+    # -----------------------------------------------------------------------
+    # Live delay annotation — augment transit legs with delay estimates
+    # derived from the in-memory vehicle cache (SIRI feed).
+    # -----------------------------------------------------------------------
+    # (route_id, direction, origin_stop, dep_time) -> result
+    delay_cache: dict = {}
+    for journey in journeys:
+        for leg in (journey.get("legs") or []):
+            mode = (leg.get("mode") or "").lower()
+            if mode == "walk":
+                continue  # walking legs have no live delay data
+
+            route_id = leg.get("route_id") or ""
+            route_name = leg.get("route_name") or ""
+            direction = leg.get("direction") or "outbound"
+            origin_stop = leg.get("origin_stop_id")
+            dep_time_str = leg.get("departure_time")
+
+            delay_key = (route_id, direction, origin_stop, dep_time_str)
+            if delay_key not in delay_cache:
+                try:
+                    delay_cache[delay_key] = await estimate_leg_delay(
+                        route_id=route_id,
+                        route_name=route_name,
+                        direction=direction,
+                        origin_stop_id=origin_stop,
+                        departure_time=dep_time_str,
+                        travel_date=dep_date,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Delay estimation failed for %s: %s", route_id, exc)
+                    delay_cache[delay_key] = None
+
+            result = delay_cache[delay_key]
+            if result is not None:
+                leg["estimated_delay_mins"] = result["delay_mins"]
+                leg["delay_source"] = result["source"]
+            else:
+                leg["estimated_delay_mins"] = None
+                leg["delay_source"] = "schedule"
 
     return {
         "origin": {"stop_id": origin_stop_id, "name": origin_name},
