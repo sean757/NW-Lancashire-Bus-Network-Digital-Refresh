@@ -55,6 +55,8 @@
     --journey-leg-border: #2E5090;
     --journey-walk-border: #95a5a6;
     --journey-walk-label-color: #7f8c8d;
+    --journey-leg-hover-bg: rgba(46, 80, 144, 0.06);
+    --journey-leg-highlight-bg: #fffde7;
 
     /* Map overlays */
     --map-instructions-bg: rgba(46, 80, 144, 0.9);
@@ -831,6 +833,8 @@ body.high-contrast {
     --journey-leg-border: #000000;
     --journey-walk-border: #444444;
     --journey-walk-label-color: #000000;
+    --journey-leg-hover-bg: #c0c0c0;
+    --journey-leg-highlight-bg: #ffff00;
 
     /* Map overlays */
     --map-instructions-bg: rgba(0, 0, 0, 0.9);
@@ -1741,6 +1745,23 @@ body.high-contrast .journey-departed-warning {
     background-color: var(--journey-leg-bg);
     border-radius: 6px;
     border-left: 3px solid var(--journey-leg-border);
+    cursor: pointer;
+    transition: background-color 0.2s;
+}
+
+/* Hover / active highlight: widens the associated map polyline via JS */
+.journey-leg:hover {
+    background-color: var(--journey-leg-hover-bg);
+}
+
+/* Flash animation played when the user clicks a map polyline */
+.journey-leg--highlighted {
+    animation: leg-highlight-flash 1.5s ease-out;
+}
+
+@keyframes leg-highlight-flash {
+    0% { background-color: var(--journey-leg-highlight-bg); }
+    100% { background-color: var(--journey-leg-bg); }
 }
 
 /* Leg header with route info and info button */
