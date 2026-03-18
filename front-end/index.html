@@ -38,6 +38,18 @@
             <img src="ClientPack/source/img/world.png" class="logo" alt="logo">
         </header>
 
+        <!-- Service Disruptions Banner -->
+        <div class="disruptions-banner" id="disruptionsBanner" aria-live="polite" aria-label="Service disruptions" hidden>
+            <button class="disruptions-banner__toggle" id="disruptionsBannerToggle" aria-expanded="false" aria-controls="disruptionsBannerBody">
+                <span class="disruptions-banner__icon" aria-hidden="true">⚠️</span>
+                <span class="disruptions-banner__title" id="disruptionsBannerTitle">Service Disruptions</span>
+                <span class="disruptions-banner__chevron" aria-hidden="true">▼</span>
+            </button>
+            <div class="disruptions-banner__body" id="disruptionsBannerBody" hidden>
+                <ul class="disruptions-list" id="disruptionsList" role="list"></ul>
+            </div>
+        </div>
+
         <!-- Route Planning Section -->
         <section class="route-planner">
             <button class="planner-toggle" id="plannerToggle" aria-label="Toggle route planner" aria-expanded="true">

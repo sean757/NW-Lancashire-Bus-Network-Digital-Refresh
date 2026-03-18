@@ -1420,6 +1420,155 @@ body.map-night-mode #map .leaflet-control-attribution a {
     color: #f3f7ff;
 }
 
+/* ── Service Disruptions Banner ───────────────────────────────────────────── */
+
+.disruptions-banner {
+    background-color: var(--white);
+    border-bottom: 3px solid var(--secondary-color);
+    box-shadow: 0 2px 6px var(--shadow);
+    z-index: 50;
+}
+
+.disruptions-banner__toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 10px 16px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--primary-color);
+    text-align: left;
+    transition: background-color 0.15s;
+    height: auto;
+    border-radius: 0;
+}
+
+.disruptions-banner__toggle:hover {
+    background-color: rgba(0, 0, 0, 0.04);
+}
+
+.disruptions-banner__icon {
+    font-size: 1.1em;
+    flex-shrink: 0;
+}
+
+.disruptions-banner__title {
+    flex: 1;
+}
+
+.disruptions-banner__chevron {
+    font-size: 0.75em;
+    transition: transform 0.2s;
+    flex-shrink: 0;
+}
+
+.disruptions-banner[data-expanded="true"] .disruptions-banner__chevron {
+    transform: rotate(180deg);
+}
+
+.disruptions-banner__body {
+    padding: 0 16px 12px;
+    max-height: 220px;
+    overflow-y: auto;
+}
+
+.disruptions-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.disruptions-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 10px 12px;
+    border-radius: 6px;
+    border-left: 4px solid var(--secondary-color);
+    background-color: var(--background-color);
+    font-size: 13px;
+}
+
+.disruptions-item--severe {
+    border-left-color: var(--error-color);
+    background-color: rgba(231, 76, 60, 0.07);
+}
+
+.disruptions-item--moderate {
+    border-left-color: var(--secondary-color);
+    background-color: rgba(243, 156, 18, 0.07);
+}
+
+.disruptions-item--minor {
+    border-left-color: var(--accent-color);
+    background-color: rgba(39, 174, 96, 0.07);
+}
+
+.disruptions-item__badge {
+    flex-shrink: 0;
+    padding: 2px 7px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    background-color: var(--secondary-color);
+    color: var(--white);
+}
+
+.disruptions-item--severe .disruptions-item__badge {
+    background-color: var(--error-color);
+}
+
+.disruptions-item--moderate .disruptions-item__badge {
+    background-color: var(--secondary-color);
+}
+
+.disruptions-item--minor .disruptions-item__badge {
+    background-color: var(--accent-color);
+}
+
+.disruptions-item__text {
+    flex: 1;
+}
+
+.disruptions-item__route {
+    font-weight: 700;
+    color: var(--primary-color);
+    margin-bottom: 2px;
+}
+
+.disruptions-item__desc {
+    color: var(--text-dimmer);
+    line-height: 1.4;
+}
+
+/* High-contrast overrides for disruptions banner */
+body.high-contrast .disruptions-banner {
+    border-bottom-color: var(--secondary-color);
+}
+
+body.high-contrast .disruptions-item {
+    background-color: var(--background-color);
+}
+
+/* ── Journey Duration Badge ───────────────────────────────────────────────── */
+
+.journey-duration {
+    font-size: 0.82em;
+    color: var(--text-dimmer);
+    font-weight: 600;
+    margin-top: 0.35em;
+    white-space: nowrap;
+}
+
 /* ── Journey List / Cards ─────────────────────────────────────────────────── */
 
 /* Error message shown when no journeys are found */
@@ -1670,6 +1819,29 @@ body.map-night-mode #map .leaflet-control-attribution a {
     margin-top: 12px;
     padding-top: 12px;
     border-top: 1px solid var(--border-light);
+}
+
+.journey-view-map-btn {
+    background-color: var(--journey-stop-color);
+    color: var(--white);
+    border: none;
+    padding: 8px 18px;
+    border-radius: 4px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background-color 0.2s;
+    width: 100%;
+}
+
+.journey-view-map-btn:hover {
+    background-color: var(--primary-color);
+}
+
+body.high-contrast .journey-view-map-btn {
+    background-color: var(--primary-color);
+    color: var(--white);
+    border: 2px solid var(--white);
 }
 
 /* Popup stop-time colours (inside Leaflet popups) */
