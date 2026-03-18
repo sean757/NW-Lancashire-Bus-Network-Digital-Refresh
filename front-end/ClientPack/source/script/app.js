@@ -1379,7 +1379,8 @@ const translations = {
         departuresLoading: 'Loading departures…',
         departuresNone: 'No scheduled departures found in the next 24 hours.',
         departuresError: 'Could not load departures for this stop.',
-        departuresToPrefix: 'To'
+        departuresToPrefix: 'To',
+        arrivesLateWarning: '⚠️ Arrives {mins} min after target time'
     },
     zh: {
         header: '兰开夏郡旅程规划',
@@ -1448,7 +1449,8 @@ const translations = {
         departuresLoading: '正在加载发车信息…',
         departuresNone: '未来24小时内没有计划发车。',
         departuresError: '无法加载该站点的发车信息。',
-        departuresToPrefix: '开往'
+        departuresToPrefix: '开往',
+        arrivesLateWarning: '⚠️ 比预定到达时间晚 {mins} 分钟'
     }
 };
 
@@ -2806,6 +2808,15 @@ function renderJourneyList(journeys, departureDate) {
             summarySection.appendChild(durationBadge);
         }
 
+        // Late-arrival warning badge (for arrive-by searches where target wasn't met)
+        if (j.arrives_late && j.late_by_mins) {
+            const lateBadge = document.createElement('div');
+            lateBadge.className = 'journey-late-warning';
+            const lateTemplate = (t.arrivesLateWarning || '⚠️ Arrives {mins} min after target time');
+            lateBadge.textContent = lateTemplate.replace('{mins}', j.late_by_mins);
+            summarySection.appendChild(lateBadge);
+        }
+
         // Right side: Times
         const times = document.createElement('div');
         times.className = 'journey-times';
@@ -2883,6 +2894,9 @@ function renderJourneyList(journeys, departureDate) {
 
         const finalTransitDest = lastBusLeg && (lastBusLeg.destination_stop_name || lastBusLeg.to_stop || lastBusLeg.destination_stop_id) || '';
 
+        // Track the transit-leg colour index so the panel colours match the map
+        let legColourIndex = 0;
+
         (dedupedLegs || []).forEach((leg) => {
             const li = document.createElement('li');
             li.className = 'journey-leg';
@@ -2934,6 +2948,12 @@ function renderJourneyList(journeys, departureDate) {
                     li.appendChild(walkTimesDiv);
                 }
             } else {
+                // Assign the same colour used on the map for this transit leg
+                const legColor = LEG_COLOURS[legColourIndex % LEG_COLOURS.length];
+                legColourIndex++;
+                // Apply the colour to the left border (matching the map polyline)
+                li.style.borderLeftColor = legColor;
+
                 const mode = (leg.mode || 'bus').toLowerCase();
                 const isRail = mode === 'rail' || mode === 'train';
                 const isTram = mode === 'tram';
@@ -2957,6 +2977,8 @@ function renderJourneyList(journeys, departureDate) {
                 const legRoute = document.createElement('div');
                 legRoute.className = 'journey-leg-route';
                 const routeStrong = document.createElement('strong');
+                // Apply the map colour to the route badge background
+                routeStrong.style.background = legColor;
                 routeStrong.textContent = `${modeIcon} ${modeLabel} ${route}`;
                 legRoute.appendChild(routeStrong);
 
