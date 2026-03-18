@@ -325,6 +325,14 @@ body {
     border-color: var(--primary-color);
 }
 
+/* Persistent highlight applied via JS when an input is awaiting a map click,
+   so the box stays visually selected even after browser focus moves to the map. */
+.input-group input.map-input-picking {
+    outline: none;
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 3px rgba(46, 80, 144, 0.18);
+}
+
 .plan-route-btn {
     background-color: var(--accent-color);
     color: var(--white);
@@ -842,6 +850,10 @@ body.high-contrast {
 body.high-contrast .input-group input,
 body.high-contrast .input-group select {
     border-width: 3px;
+}
+
+body.high-contrast .input-group input.map-input-picking {
+    box-shadow: 0 0 0 3px var(--primary-color);
 }
 
 /* Notification Toast */
@@ -1613,14 +1625,16 @@ body.map-night-mode #map .leaflet-control-attribution a {
     display: inline-block;
     background: #f39c12;
     color: #fff;
-    font-size: 0.82em;
+    font-size: 0.72em;
     font-weight: 700;
-    padding: 2px 9px;
+    padding: 2px 6px;
     border-radius: 10px;
     border: 1px solid #d68910;
-    margin-top: 6px;
-    white-space: nowrap;
+    margin-top: 4px;
+    white-space: normal;
+    word-break: break-word;
     letter-spacing: 0.02em;
+    max-width: 100%;
 }
 
 body.high-contrast .journey-late-warning {
@@ -1634,14 +1648,16 @@ body.high-contrast .journey-late-warning {
     display: inline-block;
     background: #e74c3c;
     color: #fff;
-    font-size: 0.82em;
+    font-size: 0.72em;
     font-weight: 700;
-    padding: 2px 9px;
+    padding: 2px 6px;
     border-radius: 10px;
     border: 1px solid #c0392b;
-    margin-top: 6px;
-    white-space: nowrap;
+    margin-top: 4px;
+    white-space: normal;
+    word-break: break-word;
     letter-spacing: 0.02em;
+    max-width: 100%;
 }
 
 body.high-contrast .journey-departed-warning {
