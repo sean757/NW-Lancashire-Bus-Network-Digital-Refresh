@@ -2600,6 +2600,8 @@ function openLegDetailsModal(leg, modeLabel, operatorName, routeName) {
 
 /**
  * Calculate journey duration in minutes from start and end time strings (HH:MM).
+ * A negative raw difference is treated as an overnight journey crossing midnight.
+ * Returns null for times that appear invalid (e.g., > 24 h difference after correction).
  */
 function calcJourneyDurationMins(startTime, endTime) {
     if (!startTime || !endTime) return null;
@@ -2607,7 +2609,11 @@ function calcJourneyDurationMins(startTime, endTime) {
     const [eh, em] = endTime.split(':').map(Number);
     if (isNaN(sh) || isNaN(sm) || isNaN(eh) || isNaN(em)) return null;
     let total = (eh * 60 + em) - (sh * 60 + sm);
-    if (total < 0) total += 24 * 60; // overnight journey
+    // A negative value most likely means the journey crosses midnight (e.g. departs
+    // 23:50 and arrives 00:30 the next day). Add 24 h to correct for this.
+    if (total < 0) total += 24 * 60;
+    // Guard against implausibly long results that indicate bad data (> 24 h).
+    if (total > 24 * 60) return null;
     return total;
 }
 
