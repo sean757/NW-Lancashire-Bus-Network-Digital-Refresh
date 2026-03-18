@@ -38,7 +38,7 @@ query PlanJourney(
   $walkSpeed: Float!,
   $transferPenalty: Int!,
   $arriveBy: Boolean!,
-  $searchWindow: Int
+  $searchWindow: Long
 ) {
   plan(
     from: { lat: $fromLat, lon: $fromLon }
@@ -297,7 +297,8 @@ def _itineraries_to_journeys(itineraries: List[Dict[str, Any]]) -> List[Dict[str
 
         # Count all transit legs (bus, rail, tram, ferry, etc.) — not just bus —
         # so that rail-only or tram-only itineraries are not incorrectly filtered.
-        transit_legs = [leg for leg in legs if (leg.get("mode") or "").lower() != "walk"]
+        transit_legs = [leg for leg in legs if (
+            leg.get("mode") or "").lower() != "walk"]
         if not transit_legs:
             continue  # skip walk-only itineraries
 
@@ -462,7 +463,8 @@ async def plan_journey(
                     resp2.raise_for_status()
                     data2 = resp2.json()
                     plan2 = (data2.get("data") or {}).get("plan") or {}
-                    late_candidates = _itineraries_to_journeys(plan2.get("itineraries") or [])
+                    late_candidates = _itineraries_to_journeys(
+                        plan2.get("itineraries") or [])
                 else:
                     late_candidates = await _plan_via_v1(
                         client,
@@ -501,6 +503,7 @@ async def plan_journey(
                         journeys.append(j)
 
             except (httpx.ConnectError, httpx.TimeoutException, httpx.HTTPStatusError) as exc:
-                logger.warning("Late-journey supplement search failed: %s", exc)
+                logger.warning(
+                    "Late-journey supplement search failed: %s", exc)
 
         return journeys
