@@ -208,6 +208,38 @@ const LIVE_BUS_REFRESH_INTERVAL_MS = 30000; // 30 seconds
 let fromInput = document.getElementById('startPoint');
 let toInput = document.getElementById('endPoint');
 
+// --- Use current location buttons ---
+function useCurrentLocation(isStart) {
+    if (!navigator.geolocation) {
+        showNotification('Geolocation is not supported by your browser.');
+        return;
+    }
+    const btn = isStart ? document.getElementById('useLocationStart') : document.getElementById('useLocationEnd');
+    if (btn) btn.disabled = true;
+    navigator.geolocation.getCurrentPosition(
+        (position) => {
+            const latlng = { lat: position.coords.latitude, lng: position.coords.longitude };
+            const item = makeCustomItem(latlng);
+            const input = isStart ? fromInput : toInput;
+            input.value = item.stop_name;
+            if (isStart) {
+                addStartMarker(item);
+            } else {
+                addEndMarker(item);
+            }
+            if (btn) btn.disabled = false;
+        },
+        (err) => {
+            console.error('Geolocation error:', err);
+            showNotification('Unable to retrieve your location.');
+            if (btn) btn.disabled = false;
+        },
+        { enableHighAccuracy: true, timeout: 10000 }
+    );
+}
+document.getElementById('useLocationStart').addEventListener('click', () => useCurrentLocation(true));
+document.getElementById('useLocationEnd').addEventListener('click', () => useCurrentLocation(false));
+
 // Suggestions dropdown for `fromInput`
 // Create container for suggestions appended to body so it can overlay the map
 let fromSuggestions = document.getElementById('fromSuggestions');
@@ -1380,7 +1412,8 @@ const translations = {
         departuresNone: 'No scheduled departures found in the next 24 hours.',
         departuresError: 'Could not load departures for this stop.',
         departuresToPrefix: 'To',
-        arrivesLateWarning: '⚠️ Arrives {mins} min after target time'
+        arrivesLateWarning: '⚠️ Arrives {mins} min after target time',
+        alreadyDepartedWarning: '⚠️ This journey has already departed'
     },
     zh: {
         header: '兰开夏郡旅程规划',
@@ -1450,7 +1483,8 @@ const translations = {
         departuresNone: '未来24小时内没有计划发车。',
         departuresError: '无法加载该站点的发车信息。',
         departuresToPrefix: '开往',
-        arrivesLateWarning: '⚠️ 比预定到达时间晚 {mins} 分钟'
+        arrivesLateWarning: '⚠️ 比预定到达时间晚 {mins} 分钟',
+        alreadyDepartedWarning: '⚠️ 此行程已出发'
     }
 };
 
@@ -2808,6 +2842,21 @@ function renderJourneyList(journeys, departureDate) {
             summarySection.appendChild(durationBadge);
         }
 
+        // Already-departed warning — shown when the first leg departs before the current time
+        if (firstLeg && firstLeg.departure_time && departureDate) {
+            const [dY, dM, dD] = departureDate.split('-').map(Number);
+            const [tH, tM] = firstLeg.departure_time.split(':').map(Number);
+            if (!isNaN(dY) && !isNaN(tH)) {
+                const depDate = new Date(dY, dM - 1, dD, tH, tM || 0);
+                if (depDate < new Date()) {
+                    const deptBadge = document.createElement('div');
+                    deptBadge.className = 'journey-departed-warning';
+                    deptBadge.textContent = t.alreadyDepartedWarning || '⚠️ This journey has already departed';
+                    summarySection.appendChild(deptBadge);
+                }
+            }
+        }
+
         // Late-arrival warning badge (for arrive-by searches where target wasn't met)
         if (j.arrives_late && j.late_by_mins) {
             const lateBadge = document.createElement('div');
@@ -2890,6 +2939,16 @@ function renderJourneyList(journeys, departureDate) {
                 }
             }
             dedupedLegs.push(leg);
+        }
+
+        // Remove short trailing walk legs (< 50 m) that can confuse users
+        while (dedupedLegs.length > 1) {
+            const last = dedupedLegs[dedupedLegs.length - 1];
+            if ((last.mode || 'bus') === 'walk' && typeof last.distance_km === 'number' && last.distance_km < 0.05) {
+                dedupedLegs.pop();
+            } else {
+                break;
+            }
         }
 
         const finalTransitDest = lastBusLeg && (lastBusLeg.destination_stop_name || lastBusLeg.to_stop || lastBusLeg.destination_stop_id) || '';
@@ -3239,6 +3298,9 @@ planRouteBtn.addEventListener('click', async () => {
         if (!routePlanner.classList.contains('collapsed')) {
             routePlanner.classList.add('collapsed');
             plannerToggle.setAttribute('aria-expanded', 'false');
+            setTimeout(() => {
+                if (map) map.invalidateSize();
+            }, 320);
         }
     } catch (err) {
         console.error('Plan route error:', err);

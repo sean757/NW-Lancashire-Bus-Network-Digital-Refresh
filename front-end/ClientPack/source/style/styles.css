@@ -159,7 +159,6 @@ body {
 /* Main Content */
 .main-content {
     min-height: 100vh;
-    height: 100vh;
     display: flex;
     flex-direction: column;
 }
@@ -463,7 +462,8 @@ body {
 .map-area {
     flex: 1 1 auto;
     position: relative;
-    min-height: 500px;
+    height: calc(100vh - 140px);
+    min-height: 400px;
     display: flex;
     flex-direction: column;
 }
@@ -471,7 +471,7 @@ body {
 #map {
     flex: 1 1 auto;
     height: 100%;
-    min-height: 500px;
+    min-height: 400px;
     z-index: 1;
     border-radius: 8px;
     overflow: hidden;
@@ -521,8 +521,8 @@ body {
     flex: 0 0 clamp(300px, 32vw, 440px);
     width: clamp(300px, 32vw, 440px);
     min-width: 300px;
-    height: 100%;
-    max-height: 100%;
+    height: calc(100vh - 140px);
+    min-height: 400px;
     position: relative;
     background-color: var(--white);
     border-radius: 8px;
@@ -1132,10 +1132,15 @@ body.high-contrast .input-group select {
         flex: 0 0 auto;
         width: 100%;
         min-width: 0;
+        height: auto;
         max-height: 38vh;
     }
 
-    .map-area,
+    .map-area {
+        height: auto;
+        min-height: 420px;
+    }
+
     #map {
         min-height: 420px;
     }
@@ -1622,6 +1627,67 @@ body.high-contrast .journey-late-warning {
     background: #000;
     color: #fff;
     border-color: #fff;
+}
+
+/* Already-departed warning badge — shown when a journey departs before the current time */
+.journey-departed-warning {
+    display: inline-block;
+    background: #e74c3c;
+    color: #fff;
+    font-size: 0.82em;
+    font-weight: 700;
+    padding: 2px 9px;
+    border-radius: 10px;
+    border: 1px solid #c0392b;
+    margin-top: 6px;
+    white-space: nowrap;
+    letter-spacing: 0.02em;
+}
+
+body.high-contrast .journey-departed-warning {
+    background: #000;
+    color: #fff;
+    border-color: #fff;
+}
+
+/* Use-current-location button inside input wrappers */
+.location-input-wrapper {
+    display: flex;
+    align-items: stretch;
+    gap: 0;
+}
+
+.location-input-wrapper input {
+    flex: 1;
+    min-width: 0;
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+}
+
+.use-location-btn {
+    flex-shrink: 0;
+    background: var(--primary-color);
+    color: var(--white);
+    border: 2px solid var(--primary-color);
+    border-left: none;
+    border-radius: 0 4px 4px 0;
+    padding: 0 10px;
+    font-size: 16px;
+    cursor: pointer;
+    transition: background-color 0.2s, opacity 0.2s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.use-location-btn:hover {
+    background: var(--accent-color);
+    border-color: var(--accent-color);
+}
+
+.use-location-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
 }
 
 /* Journey results count header */

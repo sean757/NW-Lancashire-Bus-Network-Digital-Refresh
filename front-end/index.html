@@ -49,16 +49,26 @@
                 <div class="planner-row">
                     <div class="input-group">
                         <label for="startPoint">Start Point:</label>
-                        <input type="text" id="startPoint" placeholder="Enter starting location">
+                        <div class="location-input-wrapper">
+                            <input type="text" id="startPoint" placeholder="Enter starting location">
+                            <button type="button" class="use-location-btn" id="useLocationStart"
+                                title="Use current location"
+                                aria-label="Use current location as start point">📍</button>
+                        </div>
                     </div>
                     <!-- Intermediate stops (up to 3, added dynamically) -->
                     <div id="stopsContainer"></div>
                     <div class="input-group">
                         <label for="endPoint">End Point:</label>
-                        <input type="text" id="endPoint" placeholder="Enter destination">
+                        <div class="location-input-wrapper">
+                            <input type="text" id="endPoint" placeholder="Enter destination">
+                            <button type="button" class="use-location-btn" id="useLocationEnd"
+                                title="Use current location" aria-label="Use current location as end point">📍</button>
+                        </div>
                     </div>
                     <div class="stops-add-row">
-                        <button type="button" class="add-stop-btn" id="addStopBtn" aria-label="Add intermediate stop">+ Add Stop</button>
+                        <button type="button" class="add-stop-btn" id="addStopBtn" aria-label="Add intermediate stop">+
+                            Add Stop</button>
                     </div>
                 </div>
 
