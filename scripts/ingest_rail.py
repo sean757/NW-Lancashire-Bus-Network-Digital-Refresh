@@ -225,11 +225,23 @@ def load_crs_stops_from_naptan(conn) -> Dict[str, Tuple[str, float, float]]:
 # ---------------------------------------------------------------------------
 
 def clear_existing_rail_data(conn) -> None:
+    log.info("Clearing existing rail data from database...")
     with conn.cursor() as cur:
-        cur.execute(
-            "DELETE FROM timetables WHERE route_id IN (SELECT route_id FROM routes WHERE route_type = 'rail')")
-        cur.execute("DELETE FROM routes WHERE route_type = 'rail'")
+        cur.execute("SET lock_timeout = '30s'")
+        try:
+            cur.execute(
+                "DELETE FROM timetables WHERE route_id IN (SELECT route_id FROM routes WHERE route_type = 'rail')")
+            cur.execute("DELETE FROM routes WHERE route_type = 'rail'")
+        except psycopg2.errors.LockNotAvailable:
+            conn.rollback()
+            raise RuntimeError(
+                "Could not acquire lock on timetables/routes tables within 30s. "
+                "Another process may be holding a transaction open "
+                "(e.g. a stopped ingest_timetables.py). "
+                "Check pg_stat_activity for 'idle in transaction' sessions."
+            )
     conn.commit()
+    log.info("Existing rail data cleared.")
 
 
 def ingest_schedule(

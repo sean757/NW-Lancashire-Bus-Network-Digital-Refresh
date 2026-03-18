@@ -13,11 +13,15 @@ How it works
     look up active vehicles on that route from the in-memory VehicleCache.
 2.  Find the closest timetable trip that serves the leg's origin stop near
     the scheduled departure time.
-3.  Determine where that trip *should* be right now according to the schedule
-    (i.e. which stop it should be nearest to at the current time).
-4.  Determine where the live vehicle *actually* is (closest stop on the route).
-5.  Convert the gap between "expected stop" and "actual stop" into an
-    approximate delay in minutes using the scheduled inter-stop times.
+3.  Project the live vehicle's GPS position onto the trip's route segments
+    (consecutive pairs of stops) to find a *continuous* position — both
+    which segment the vehicle is on and how far along it (0.0–1.0).
+4.  Linearly interpolate the scheduled time at that fractional position.
+5.  Delay = (current wall-clock time) − (interpolated scheduled time).
+
+This continuous-interpolation approach avoids the coarse errors of discrete
+stop-snapping, where a bus 90% between two stops would be "snapped" back to
+the earlier stop and accumulate a large false delay.
 
 If no live vehicle is found on the route the function returns None so the
 caller can mark the leg as ``delay_source: "schedule"``.
@@ -33,11 +37,25 @@ from app.services.route_cache import route_cache
 
 logger = logging.getLogger(__name__)
 
-# Maximum age (seconds) of a vehicle position before we consider it stale.
-_MAX_VEHICLE_AGE_SECS = 300  # 5 minutes
+# Maximum distance (km) from the route line for a vehicle to be considered "on" it.
+_MAX_ROUTE_DISTANCE_KM = 0.5
 
-# Maximum distance (km) to consider a vehicle as being "on" a stop.
-_SNAP_RADIUS_KM = 0.5
+# ---------------------------------------------------------------------------
+# Vehicle → trip_id mapping cache.
+#
+# Each SIRI vehicle carries a DatedVehicleJourneyRef (DVJR) that uniquely
+# identifies the journey within a (line, direction) on a given day.  While
+# the DVJR numbering differs from the TransXChange VehicleJourneyCode stored
+# in our DB, we can resolve the mapping once by matching the vehicle's origin
+# stop + aimed departure time against the timetable.  The resolved trip_id
+# is cached so subsequent delay requests for the same vehicle are instant
+# and exact.
+#
+# Cache key: (line_ref, direction_ref, dvjr)  →  (trip_id, route_id) or None
+# ---------------------------------------------------------------------------
+_dvjr_trip_cache: Dict[tuple, Optional[tuple]] = {}
+# The vehicle-cache generation count when _dvjr_trip_cache was last rebuilt.
+_dvjr_cache_generation: Optional[datetime] = None
 
 
 def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -67,48 +85,203 @@ def _time_str_to_secs(t: str) -> Optional[int]:
         return None
 
 
-def _find_vehicles_on_route(route_name: str) -> list[dict]:
+def _find_vehicles_on_route(
+    route_name: str,
+    direction: Optional[str] = None,
+) -> list[dict]:
     """Return cached vehicles whose line_ref or line_name matches the route.
 
     The SIRI feed uses operator-specific line references (e.g. "40", "X1")
     which should match the route_name from our GTFS data.  We compare
     case-insensitively and strip whitespace.
+
+    When *direction* is provided, only vehicles whose ``direction_ref`` matches
+    are returned.  This prevents a vehicle travelling in the opposite direction
+    from being mis-identified as the one serving this leg.
     """
     if not route_name:
         return []
     target = route_name.strip().upper()
+    target_dir = (direction or "").strip().lower()
     matches = []
     for v in vehicle_cache.vehicles:
         line = (v.get("line_ref") or v.get("line_name") or "").strip().upper()
-        if line == target:
-            matches.append(v)
+        if line != target:
+            continue
+        # Filter by direction when available
+        if target_dir:
+            v_dir = (v.get("direction_ref") or "").strip().lower()
+            if v_dir and v_dir != target_dir:
+                continue
+        matches.append(v)
     return matches
 
 
-def _snap_vehicle_to_stop(
-    vehicle_lat: float,
-    vehicle_lon: float,
-    route_stops: list[tuple],
-) -> Optional[tuple]:
-    """Find the closest stop on the route to the vehicle position.
+def _parse_aimed_departure_secs(vehicle: dict) -> Optional[int]:
+    """Extract OriginAimedDepartureTime from a vehicle dict as seconds since midnight.
 
-    ``route_stops`` is a list of ``(stop_id, sequence, direction)`` tuples
-    from the route cache, already filtered to the correct direction.
-
-    Returns ``(stop_id, sequence, distance_km)`` or None if no stop is
-    within ``_SNAP_RADIUS_KM``.
+    The SIRI feed provides ISO-8601 timestamps like ``2026-03-18T18:48:00+00:00``.
+    Returns seconds since midnight (local time portion) or None.
     """
+    raw = (vehicle.get("origin_aimed_departure") or "").strip()
+    if not raw:
+        return None
+    # Extract the time portion: look for HH:MM:SS after 'T'
+    try:
+        if "T" in raw:
+            time_part = raw.split("T")[1]
+            # Strip timezone offset (+00:00, Z, etc.)
+            for sep in ("+", "-", "Z"):
+                if sep in time_part and time_part.index(sep) > 0:
+                    time_part = time_part[:time_part.index(sep)]
+                    break
+            parts = time_part.split(":")
+            h, m = int(parts[0]), int(parts[1])
+            s = int(parts[2]) if len(parts) > 2 else 0
+            return h * 3600 + m * 60 + s
+    except (ValueError, IndexError):
+        pass
+    return None
+
+
+# ---------------------------------------------------------------------------
+#  DVJR → trip_id resolution
+# ---------------------------------------------------------------------------
+
+def _resolve_dvjr_to_trip(vehicle: dict) -> Optional[tuple]:
+    """Resolve a vehicle's DatedVehicleJourneyRef to a (trip_id, route_id).
+
+    Uses the vehicle's origin stop + aimed departure + direction + line to
+    find the matching timetable trip.  Returns ``(trip_id, route_id)`` or
+    ``None``.
+    """
+    aimed_secs = _parse_aimed_departure_secs(vehicle)
+    if aimed_secs is None:
+        return None
+
+    v_origin = (vehicle.get("origin_ref") or "").strip()
+    if not v_origin:
+        return None
+
+    line = (vehicle.get("line_ref") or "").strip().upper()
+    direction = (vehicle.get("direction_ref") or "").strip().lower()
+
+    # Search all routes with this line name for a trip departing from
+    # v_origin at aimed_secs.
     best = None
-    for stop_id, seq, _dir in route_stops:
-        coords = route_cache.stop_coords.get(stop_id)
-        if not coords:
+    best_diff = float("inf")
+
+    for rid, rinfo in route_cache.routes.items():
+        if (rinfo.get("route_name") or "").strip().upper() != line:
             continue
-        dist = _haversine_km(vehicle_lat, vehicle_lon, coords[0], coords[1])
-        if best is None or dist < best[2]:
-            best = (stop_id, seq, dist)
-    if best and best[2] <= _SNAP_RADIUS_KM:
+        dep_key = (rid, direction, v_origin)
+        for sched_dep, trip_id in route_cache.stop_departures.get(dep_key, []):
+            diff = abs(sched_dep - aimed_secs)
+            if diff < best_diff:
+                best_diff = diff
+                best = (trip_id, rid)
+
+    # Accept only if within 5 minutes of the aimed departure
+    if best and best_diff <= 300:
         return best
     return None
+
+
+def _refresh_dvjr_cache() -> None:
+    """Rebuild the DVJR → trip_id cache if the vehicle cache has been updated."""
+    global _dvjr_trip_cache, _dvjr_cache_generation
+
+    vc_updated = vehicle_cache.last_updated
+    if vc_updated == _dvjr_cache_generation:
+        return  # still fresh
+
+    new_cache: Dict[tuple, Optional[tuple]] = {}
+    for v in vehicle_cache.vehicles:
+        dvjr = (v.get("dated_vehicle_journey_ref") or "").strip()
+        if not dvjr:
+            continue
+        line = (v.get("line_ref") or "").strip().upper()
+        direction = (v.get("direction_ref") or "").strip().lower()
+        key = (line, direction, dvjr)
+        if key in new_cache:
+            continue  # already resolved
+        new_cache[key] = _resolve_dvjr_to_trip(v)
+
+    _dvjr_trip_cache = new_cache
+    _dvjr_cache_generation = vc_updated
+    logger.debug(
+        "DVJR cache rebuilt: %d entries, %d resolved",
+        len(new_cache),
+        sum(1 for v in new_cache.values() if v is not None),
+    )
+
+
+def _get_trip_for_vehicle(vehicle: dict) -> Optional[tuple]:
+    """Look up the (trip_id, route_id) for a vehicle via its DVJR.
+
+    Returns ``(trip_id, route_id)`` or ``None`` if the DVJR is missing or
+    could not be resolved.
+    """
+    dvjr = (vehicle.get("dated_vehicle_journey_ref") or "").strip()
+    if not dvjr:
+        return None
+    line = (vehicle.get("line_ref") or "").strip().upper()
+    direction = (vehicle.get("direction_ref") or "").strip().lower()
+    return _dvjr_trip_cache.get((line, direction, dvjr))
+
+
+def _find_vehicle_on_trip_route(
+    vlat: float,
+    vlon: float,
+    trip_id: str,
+) -> Optional[tuple]:
+    """Locate a vehicle along a trip's stop sequence using segment projection.
+
+    Instead of snapping to the single nearest stop (which loses all inter-stop
+    progress), this projects the vehicle onto each consecutive pair of stops
+    and picks the segment where the perpendicular distance is smallest.
+
+    Returns ``(seg_index, fraction, perp_dist_km)`` or ``None``:
+
+    - *seg_index*: index into ``trip_stops_sorted[trip_id]`` for the segment
+      start stop.
+    - *fraction*: 0.0 → at stop[seg_index], 1.0 → at stop[seg_index+1].
+    - *perp_dist_km*: approximate perpendicular distance from the vehicle to
+      the route segment (quality metric — lower is better).
+    """
+    trip_stops = route_cache.trip_stops_sorted.get(trip_id, [])
+    if len(trip_stops) < 2:
+        return None
+
+    best = None
+    for i in range(len(trip_stops) - 1):
+        sid_a = trip_stops[i][0]
+        sid_b = trip_stops[i + 1][0]
+        ca = route_cache.stop_coords.get(sid_a)
+        cb = route_cache.stop_coords.get(sid_b)
+        if not ca or not cb:
+            continue
+
+        da = _haversine_km(vlat, vlon, ca[0], ca[1])
+        db = _haversine_km(vlat, vlon, cb[0], cb[1])
+        dab = _haversine_km(ca[0], ca[1], cb[0], cb[1])
+
+        if dab < 0.001:  # two stops at essentially the same location
+            frac = 0.0
+            perp = da
+        else:
+            # Projection fraction via the cosine rule.
+            frac = max(0.0, min(1.0,
+                                (da ** 2 + dab ** 2 - db ** 2) / (2 * dab ** 2)))
+            # Perpendicular distance via Heron's formula.
+            s = (da + db + dab) / 2.0
+            area_sq = s * (s - da) * (s - db) * (s - dab)
+            perp = (2.0 * math.sqrt(max(0.0, area_sq)) / dab)
+
+        if best is None or perp < best[2]:
+            best = (i, frac, perp)
+
+    return best
 
 
 def _find_matching_trip(
@@ -144,71 +317,34 @@ def _find_matching_trip(
     return best_trip
 
 
-def _expected_stop_at_time(
+def _interpolate_scheduled_time(
     trip_id: str,
-    current_secs: int,
-) -> Optional[tuple]:
-    """Determine which stop the trip should be at (or past) at ``current_secs``.
+    seg_index: int,
+    fraction: float,
+) -> Optional[float]:
+    """Linearly interpolate the scheduled time at a fractional route position.
 
-    Walks the trip's stop sequence and returns the last stop whose scheduled
-    departure time is <= current_secs.
+    Uses the *departure* time of the segment's start stop and the *arrival*
+    time of the segment's end stop.
 
-    Returns ``(stop_id, sequence, dep_secs)`` or None.
+    Returns seconds since midnight, or ``None``.
     """
-    stops = route_cache.trip_stops_sorted.get(trip_id, [])
-    if not stops:
+    trip_stops = route_cache.trip_stops_sorted.get(trip_id, [])
+    if seg_index + 1 >= len(trip_stops):
         return None
 
-    best = None
-    for stop_id, seq, arr_secs, dep_secs in stops:
-        if dep_secs <= current_secs:
-            best = (stop_id, seq, dep_secs)
-        else:
-            break  # stops are sorted by sequence / time
-    return best
+    # Each entry is (stop_id, seq, arr_secs, dep_secs)
+    dep_a = trip_stops[seg_index][3]      # departure from segment start
+    arr_b = trip_stops[seg_index + 1][2]  # arrival at segment end
 
-
-def _estimate_delay_from_position(
-    trip_id: str,
-    expected_seq: int,
-    expected_dep_secs: int,
-    actual_seq: int,
-    actual_stop_id: str,
-) -> Optional[int]:
-    """Estimate delay in minutes based on the gap between where the vehicle
-    *should* be (expected_seq) and where it *is* (actual_seq).
-
-    If the vehicle is behind schedule (actual_seq < expected_seq), we sum the
-    scheduled inter-stop travel times between the two positions to get an
-    approximate delay.
-
-    Returns delay in minutes (>= 0), or None if we can't compute.
-    """
-    if actual_seq >= expected_seq:
-        # Vehicle is at or ahead of the expected position — no delay (or early)
-        return 0
-
-    # The vehicle is behind schedule.  Sum scheduled travel time between
-    # actual position and expected position to estimate how late it is.
-    stops = route_cache.trip_stops_sorted.get(trip_id, [])
-    if not stops:
+    if dep_a is None or arr_b is None:
         return None
 
-    # Find times at actual and expected stops
-    actual_dep = None
-    expected_dep = None
-    for stop_id, seq, arr_secs, dep_secs in stops:
-        if seq == actual_seq:
-            actual_dep = dep_secs
-        if seq == expected_seq:
-            expected_dep = dep_secs
+    # Guard against backward time (can happen with timing-point-only data)
+    if arr_b < dep_a:
+        arr_b = dep_a
 
-    if actual_dep is not None and expected_dep is not None:
-        delay_secs = expected_dep - actual_dep
-        if delay_secs > 0:
-            return max(1, round(delay_secs / 60))
-
-    return None
+    return dep_a + fraction * (arr_b - dep_a)
 
 
 async def estimate_leg_delay(
@@ -224,67 +360,165 @@ async def estimate_leg_delay(
     Returns a dict ``{"delay_mins": int, "source": "live_position"}``
     if a delay estimate can be derived, or ``None`` if live data is
     unavailable.
+
+    Matching strategy
+    -----------------
+    1. **DVJR-based (preferred):** Look up each vehicle's
+       ``DatedVehicleJourneyRef`` in the pre-built DVJR→trip_id cache.
+       If the resolved trip_id matches the leg's trip, use that vehicle
+       directly — no fuzzy matching needed.
+    2. **Fuzzy fallback:** If no DVJR match is found, fall back to the
+       aimed-departure-time + origin/destination membership heuristic.
     """
     if not route_id or not origin_stop_id:
         return None
 
-    # 1. Find live vehicles on this route
-    vehicles = _find_vehicles_on_route(route_name)
+    # Ensure the DVJR cache is up-to-date with the latest vehicle refresh.
+    _refresh_dvjr_cache()
+
+    # 1. Find live vehicles on this route (filtered by direction)
+    vehicles = _find_vehicles_on_route(route_name, direction)
     if not vehicles:
         return None
 
-    # 2. Convert departure time to seconds since midnight
+    # 3. Convert departure time to seconds since midnight
     dep_secs = _time_str_to_secs(departure_time)
     if dep_secs is None:
         return None
 
-    # 3. Find the closest matching timetable trip
-    trip_id = _find_matching_trip(
-        route_id, direction, origin_stop_id, dep_secs, travel_date)
-    if not trip_id:
-        return None
-
-    # 4. Get ordered stops for this route+direction
-    ordered_stops = route_cache.get_stops_for_route(route_id, direction)
-    if not ordered_stops:
-        return None
-
-    # 5. Determine where the trip should be right now
+    # 4. Current wall-clock time in seconds since midnight
     now = datetime.now()
     current_secs = now.hour * 3600 + now.minute * 60 + now.second
 
-    expected = _expected_stop_at_time(trip_id, current_secs)
-    if not expected:
-        # Trip hasn't started yet or has no schedule data
+    # 5. Route stop set for membership checks
+    ordered_stops = route_cache.get_stops_for_route(route_id, direction)
+    route_stop_ids = {s[0] for s in ordered_stops} if ordered_stops else set()
+
+    # ------------------------------------------------------------------
+    # 6. Try DVJR-based exact matching first.
+    #
+    # Instead of finding a trip then matching a vehicle to it, we start
+    # from each vehicle's DVJR-resolved trip and check whether that trip
+    # serves the user's origin stop near the requested departure time.
+    # This avoids the problem of duplicate trip_ids for the same physical
+    # departure (different day-of-week variants).
+    # ------------------------------------------------------------------
+    _DEP_MATCH_WINDOW = 900  # 15 minutes
+
+    dvjr_vehicle = None
+    dvjr_trip_id = None
+    dvjr_aimed_diff = float("inf")
+
+    for vehicle in vehicles:
+        resolved = _get_trip_for_vehicle(vehicle)
+        if not resolved:
+            continue
+        v_trip_id, v_route_id = resolved
+        if v_route_id != route_id:
+            continue
+        # Check this trip serves the user's origin stop near dep_secs
+        stop_info = route_cache.trip_stop_seq.get(
+            (v_trip_id, origin_stop_id))
+        if not stop_info:
+            continue
+        trip_dep_secs = stop_info[2]  # dep_secs at user's stop
+        diff = abs(trip_dep_secs - dep_secs)
+        if diff > _DEP_MATCH_WINDOW:
+            continue
+        if diff < dvjr_aimed_diff:
+            dvjr_aimed_diff = diff
+            dvjr_vehicle = vehicle
+            dvjr_trip_id = v_trip_id
+
+    # ------------------------------------------------------------------
+    # 7. Fuzzy fallback if no DVJR match
+    # ------------------------------------------------------------------
+    if dvjr_vehicle is None:
+        # Need a trip to project against — find one the traditional way.
+        trip_id = _find_matching_trip(
+            route_id, direction, origin_stop_id, dep_secs, travel_date)
+        if not trip_id:
+            return None
+
+        trip_stops = route_cache.trip_stops_sorted.get(trip_id, [])
+        if not trip_stops or len(trip_stops) < 2:
+            return None
+
+        # Trip-not-started guard
+        _user_stop_info = route_cache.trip_stop_seq.get(
+            (trip_id, origin_stop_id))
+        if _user_stop_info:
+            if current_secs < _user_stop_info[2] - 900:
+                return None
+
+        best_aimed_diff = float("inf")
+        for vehicle in vehicles:
+            aimed_secs = _parse_aimed_departure_secs(vehicle)
+            v_origin = (vehicle.get("origin_ref") or "").strip()
+            if aimed_secs is not None:
+                match_dep = trip_stops[0][3]
+                if v_origin:
+                    info = route_cache.trip_stop_seq.get(
+                        (trip_id, v_origin))
+                    if info:
+                        match_dep = info[2]
+                aimed_diff = abs(aimed_secs - match_dep)
+                if aimed_diff > _DEP_MATCH_WINDOW:
+                    continue
+            else:
+                aimed_diff = float("inf")
+
+            v_dest = (vehicle.get("destination_ref") or "").strip()
+            if v_origin or v_dest:
+                o_ok = v_origin in route_stop_ids if v_origin else False
+                d_ok = v_dest in route_stop_ids if v_dest else False
+                if not o_ok and not d_ok:
+                    continue
+
+            if aimed_diff < best_aimed_diff:
+                best_aimed_diff = aimed_diff
+                dvjr_vehicle = vehicle
+                dvjr_trip_id = trip_id
+    else:
+        trip_id = dvjr_trip_id
+
+    if dvjr_vehicle is None or dvjr_trip_id is None:
         return None
 
-    # 6. Find the best matching vehicle and snap it to the nearest stop
-    best_result = None
-    for vehicle in vehicles:
-        vlat = vehicle.get("latitude")
-        vlon = vehicle.get("longitude")
-        if vlat is None or vlon is None:
-            continue
+    # Trip-not-started guard (DVJR path)
+    _user_stop_info = route_cache.trip_stop_seq.get(
+        (dvjr_trip_id, origin_stop_id))
+    if _user_stop_info and current_secs < _user_stop_info[2] - 900:
+        return None
 
-        snap = _snap_vehicle_to_stop(vlat, vlon, ordered_stops)
-        if snap is None:
-            continue
+    trip_stops = route_cache.trip_stops_sorted.get(dvjr_trip_id, [])
+    if not trip_stops or len(trip_stops) < 2:
+        return None
 
-        actual_stop_id, actual_seq, dist = snap
+    # ------------------------------------------------------------------
+    # 8. Compute delay via segment projection + time interpolation
+    # ------------------------------------------------------------------
+    vlat = dvjr_vehicle.get("latitude")
+    vlon = dvjr_vehicle.get("longitude")
+    if vlat is None or vlon is None:
+        return None
 
-        delay_mins = _estimate_delay_from_position(
-            trip_id,
-            expected[1],  # expected sequence
-            expected[2],  # expected dep_secs
-            actual_seq,
-            actual_stop_id,
-        )
-        if delay_mins is not None:
-            if best_result is None or delay_mins < best_result["delay_mins"]:
-                best_result = {
-                    "delay_mins": delay_mins,
-                    "source": "live_position",
-                    "vehicle_id": vehicle.get("vehicle_id"),
-                }
+    segment = _find_vehicle_on_trip_route(vlat, vlon, dvjr_trip_id)
+    if segment is None:
+        return None
+    seg_index, fraction, perp_dist = segment
+    if perp_dist > _MAX_ROUTE_DISTANCE_KM:
+        return None
 
-    return best_result
+    sched_time = _interpolate_scheduled_time(dvjr_trip_id, seg_index, fraction)
+    if sched_time is None:
+        return None
+
+    delay_secs = current_secs - sched_time
+    delay_mins = round(delay_secs / 60)
+
+    return {
+        "delay_mins": delay_mins,
+        "source": "live_position",
+        "vehicle_id": dvjr_vehicle.get("vehicle_id"),
+    }

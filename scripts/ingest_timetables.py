@@ -231,6 +231,7 @@ def _ensure_route_waypoint_variant_schema(conn):
             "CREATE INDEX IF NOT EXISTS idx_route_waypoints_variant "
             "ON route_waypoints(route_id, direction, variant_id)"
         )
+    conn.commit()
 
 
 def _ensure_timetables_call_activity_schema(conn):
@@ -265,6 +266,7 @@ def _ensure_timetables_call_activity_schema(conn):
             "ALTER TABLE timetables "
             "ALTER COLUMN setdown_allowed SET NOT NULL"
         )
+    conn.commit()
 
 
 def parse_txc_xml(conn, xml_content, operator_code, valid_stops, stop_coords, processed_route_ids=None):
@@ -555,9 +557,13 @@ def parse_txc_xml(conn, xml_content, operator_code, valid_stops, stop_coords, pr
         first_link = combined_links[0]
         first_pickup, first_setdown = _activity_flags(
             first_link.get('from_activity'))
+        # Use a monotonically increasing sequence counter per trip
+        # instead of the XML SequenceNumber which is scoped per-section
+        # and overlaps when multiple sections are concatenated.
+        trip_seq_counter = 1
         stop_records = [{
             'stop_ref': first_link['from_stop'],
-            'seq': first_link['from_seq'],
+            'seq': trip_seq_counter,
             'arrival_secs': base_secs,
             'departure_secs': base_secs,
             'pickup_allowed': first_pickup,
@@ -571,9 +577,10 @@ def parse_txc_xml(conn, xml_content, operator_code, valid_stops, stop_coords, pr
             if current['stop_ref'] != link['from_stop']:
                 from_pickup, from_setdown = _activity_flags(
                     link.get('from_activity'))
+                trip_seq_counter += 1
                 stop_records.append({
                     'stop_ref': link['from_stop'],
-                    'seq': link['from_seq'],
+                    'seq': trip_seq_counter,
                     'arrival_secs': current['departure_secs'],
                     'departure_secs': current['departure_secs'],
                     'pickup_allowed': from_pickup,
@@ -594,9 +601,10 @@ def parse_txc_xml(conn, xml_content, operator_code, valid_stops, stop_coords, pr
 
             to_pickup, to_setdown = _activity_flags(link.get('to_activity'))
 
+            trip_seq_counter += 1
             stop_records.append({
                 'stop_ref': link['to_stop'],
-                'seq': link['to_seq'],
+                'seq': trip_seq_counter,
                 'arrival_secs': arrival_to_secs,
                 'departure_secs': arrival_to_secs,
                 'pickup_allowed': to_pickup,

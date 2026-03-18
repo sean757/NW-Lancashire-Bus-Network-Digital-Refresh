@@ -81,16 +81,47 @@ class VehicleCache:
                             'siri:Bearing', namespaces=_SIRI_NS
                         )
                         line_ref = (
-                            journey.findtext('siri:LineRef', namespaces=_SIRI_NS) or ''
+                            journey.findtext(
+                                'siri:LineRef', namespaces=_SIRI_NS) or ''
                         )
                         line_name = (
                             journey.findtext(
                                 'siri:PublishedLineName', namespaces=_SIRI_NS
                             ) or line_ref
                         )
+                        direction_ref = (
+                            journey.findtext(
+                                'siri:DirectionRef', namespaces=_SIRI_NS) or ''
+                        )
+                        origin_ref = (
+                            journey.findtext('siri:OriginRef',
+                                             namespaces=_SIRI_NS) or ''
+                        )
+                        destination_ref = (
+                            journey.findtext(
+                                'siri:DestinationRef', namespaces=_SIRI_NS) or ''
+                        )
+                        origin_aimed_departure = (
+                            journey.findtext(
+                                'siri:OriginAimedDepartureTime', namespaces=_SIRI_NS) or ''
+                        )
+
+                        # FramedVehicleJourneyRef contains a journey
+                        # identifier that is (almost always) unique per
+                        # line+direction within the feed.
+                        fvjr_el = journey.find(
+                            'siri:FramedVehicleJourneyRef', namespaces=_SIRI_NS)
+                        dated_vehicle_journey_ref = ''
+                        if fvjr_el is not None:
+                            dated_vehicle_journey_ref = (
+                                fvjr_el.findtext(
+                                    'siri:DatedVehicleJourneyRef',
+                                    namespaces=_SIRI_NS) or ''
+                            )
 
                         try:
-                            bearing = float(bearing_raw) if bearing_raw else 0.0
+                            bearing = float(
+                                bearing_raw) if bearing_raw else 0.0
                         except ValueError:
                             bearing = 0.0
 
@@ -102,6 +133,11 @@ class VehicleCache:
                             'latitude': float(lat),
                             'longitude': float(lon),
                             'bearing': bearing,
+                            'direction_ref': direction_ref,
+                            'origin_ref': origin_ref,
+                            'destination_ref': destination_ref,
+                            'origin_aimed_departure': origin_aimed_departure,
+                            'dated_vehicle_journey_ref': dated_vehicle_journey_ref,
                         })
 
                 except (httpx.HTTPError, etree.XMLSyntaxError) as exc:
@@ -140,7 +176,8 @@ class VehicleCache:
                     logger.error("Vehicle cache refresh failed: %s", exc)
                 await asyncio.sleep(interval_secs)
         except asyncio.CancelledError:
-            logger.debug("Vehicle cache refresh loop cancelled — shutting down")
+            logger.debug(
+                "Vehicle cache refresh loop cancelled — shutting down")
 
 
 # Singleton shared across the application.

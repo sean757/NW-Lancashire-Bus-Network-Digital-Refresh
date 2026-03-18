@@ -73,6 +73,21 @@ CREATE TABLE IF NOT EXISTS timetables (
     valid_until     DATE
 );
 
+-- Ensure each stop in a trip has a unique sequence position.
+-- This prevents duplicate rows when multiple XML files or multi-section
+-- JourneyPatterns contribute stops for the same trip.
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'uq_timetables_trip_stop_seq'
+    ) THEN
+        ALTER TABLE timetables
+        ADD CONSTRAINT uq_timetables_trip_stop_seq
+        UNIQUE (route_id, trip_id, stop_sequence);
+    END IF;
+END$$;
+
 CREATE INDEX IF NOT EXISTS idx_timetables_route ON timetables(route_id);
 CREATE INDEX IF NOT EXISTS idx_timetables_stop ON timetables(stop_id);
 CREATE INDEX IF NOT EXISTS idx_timetables_trip ON timetables(trip_id);

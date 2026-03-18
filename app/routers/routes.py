@@ -167,10 +167,13 @@ async def get_route_stops_between(
             detail="Invalid departure_time format. Use HH:MM or HH:MM:SS.",
         )
 
+    # Use DISTINCT ON to deduplicate rows that share the same
+    # (trip_id, stop_sequence) — legacy data may contain overlapping
+    # sequence numbers from multi-section JourneyPatterns.
     if direction:
         rows_sql = text(
             """
-            SELECT
+            SELECT DISTINCT ON (t.trip_id, t.stop_sequence)
                 t.trip_id,
                 t.stop_id,
                 t.stop_sequence,
@@ -182,7 +185,7 @@ async def get_route_stops_between(
             LEFT JOIN stops s ON s.stop_id = t.stop_id
             WHERE t.route_id = :route_id
               AND t.direction = :direction
-            ORDER BY t.trip_id, t.stop_sequence
+            ORDER BY t.trip_id, t.stop_sequence, t.arrival_time
             """
         )
         all_rows = (
@@ -191,7 +194,7 @@ async def get_route_stops_between(
     else:
         rows_sql = text(
             """
-            SELECT
+            SELECT DISTINCT ON (t.trip_id, t.stop_sequence)
                 t.trip_id,
                 t.stop_id,
                 t.stop_sequence,
@@ -202,7 +205,7 @@ async def get_route_stops_between(
             FROM timetables t
             LEFT JOIN stops s ON s.stop_id = t.stop_id
             WHERE t.route_id = :route_id
-            ORDER BY t.trip_id, t.stop_sequence
+            ORDER BY t.trip_id, t.stop_sequence, t.arrival_time
             """
         )
         all_rows = (
