@@ -32,6 +32,10 @@ const MAX_STOPS = 3;
 let stopItems = [];        // array of selected location items (same shape as selectedStartItem)
 let stopInputTimers = [];  // debounce timers for each stop input
 let stopDwellTimes = [];   // dwell time (minutes) for each intermediate stop
+let viaMarkers = [];       // Leaflet markers shown on the map for each intermediate stop input
+
+// Maps each leg object → its Leaflet polyline layer, rebuilt by drawJourneyOnMap()
+let legToPolylineMap = new Map();
 
 // Tracks which location input box is awaiting a map click:
 // null | 'from' | 'to' | { type: 'stop', idx: number }
@@ -172,7 +176,29 @@ function addEndMarker(item) {
     map.panTo(coords);
 }
 
-// Accessible notification function (UI helper)
+function addViaMarker(item, idx) {
+    if (!item || !map) return;
+    const coords = extractLatLng(item);
+    if (!coords) return;
+    if (viaMarkers[idx]) {
+        map.removeLayer(viaMarkers[idx]);
+        viaMarkers[idx] = null;
+    }
+    viaMarkers[idx] = L.circleMarker(coords, {
+        radius: 8,
+        fillColor: '#F39C12',
+        color: '#ffffff',
+        weight: 2,
+        fillOpacity: 1
+    }).addTo(map).bindPopup(getLabelFromItem(item));
+}
+
+function removeViaMarker(idx) {
+    if (viaMarkers[idx] && map) {
+        map.removeLayer(viaMarkers[idx]);
+        viaMarkers[idx] = null;
+    }
+}
 function showNotification(message) {
     if (uiSettings.disableNotifications) return;
     const toast = document.getElementById('notificationToast');
@@ -745,6 +771,7 @@ function initializeLeafletMap() {
             const inp = document.querySelector(`.stop-point-input[data-idx="${idx}"]`);
             if (inp) inp.value = label;
             clearStopSuggestions(idx);
+            addViaMarker(item, idx);
             showNotification(t.mapClickNotifyStop || 'Via stop set.');
         }
         setActiveMapInput(null);
@@ -2146,7 +2173,7 @@ function addStopRow() {
                 const locs = await getPossibleLocations(q);
                 if (locs && locs.length) {
                     const match = locs.find(it => getLabelFromItem(it).trim().toLowerCase() === q.toLowerCase());
-                    if (match) { stopItems[stopIdx] = match; clearStopSuggestions(stopIdx); }
+                    if (match) { stopItems[stopIdx] = match; addViaMarker(match, stopIdx); clearStopSuggestions(stopIdx); }
                 }
             } catch (err) { /* silent */ }
         }, 2000);
@@ -2193,6 +2220,7 @@ function renderStopSuggestions(idx, items, inputEl) {
         li.textContent = label;
         li.addEventListener('click', () => {
             stopItems[idx] = it;
+            addViaMarker(it, idx);
             if (inputEl) inputEl.value = label;
             clearStopSuggestions(idx);
             if (inputEl) inputEl.focus();
@@ -2226,12 +2254,16 @@ function removeStopRow(row, removedIdx) {
     const sug = document.getElementById(`stopSuggestions${removedIdx}`);
     if (sug) sug.remove();
 
+    // Remove the via marker for the removed stop
+    removeViaMarker(removedIdx);
+
     row.remove();
 
     // Re-index remaining rows
     const rows = container.querySelectorAll('.stop-input-row');
     const newStopItems = [];
     const newDwellTimes = [];
+    const newViaMarkers = [];
     rows.forEach((r, newIdx) => {
         const oldIdx = parseInt(r.dataset.stopIdx, 10);
         r.dataset.stopIdx = String(newIdx);
@@ -2276,12 +2308,15 @@ function removeStopRow(row, removedIdx) {
 
         newStopItems[newIdx] = stopItems[oldIdx] || null;
         newDwellTimes[newIdx] = stopDwellTimes[oldIdx] || 0;
+        newViaMarkers[newIdx] = viaMarkers[oldIdx] || null;
     });
 
     stopItems.length = 0;
     stopInputTimers.length = 0;
     stopDwellTimes.length = 0;
     newStopItems.forEach((it, i) => { stopItems[i] = it; stopInputTimers[i] = null; stopDwellTimes[i] = newDwellTimes[i] || 0; });
+    viaMarkers.length = 0;
+    newViaMarkers.forEach((m, i) => { viaMarkers[i] = m || null; });
 
     // If the removed stop was the active map input, clear it
     if (activeMapInput && activeMapInput.type === 'stop') {
@@ -2312,10 +2347,36 @@ document.addEventListener('DOMContentLoaded', () => {
 // Distinct colours used to distinguish consecutive bus legs on the map.
 const LEG_COLOURS = ['#E74C3C', '#8E44AD', '#2980B9', '#27AE60', '#F39C12', '#16A085', '#D35400', '#2C3E50'];
 
+/**
+ * Scroll to and briefly flash the journey-leg panel entry that corresponds
+ * to the given leg object.  Called when the user clicks a polyline on the map.
+ */
+function highlightLegInPanel(leg) {
+    document.querySelectorAll('.journey-leg').forEach(el => {
+        if (el._leg !== leg) return;
+        // Ensure the parent journey card is expanded so the leg is visible
+        const legsEl = el.closest('.journey-legs');
+        if (legsEl && legsEl.style.display === 'none') {
+            legsEl.style.display = 'block';
+            const card = legsEl.closest('.journey-card');
+            if (card) {
+                const toggleIcon = card.querySelector('.journey-toggle-icon');
+                if (toggleIcon) toggleIcon.textContent = '▼';
+            }
+        }
+        el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        // Restart the CSS animation by removing and re-adding the class
+        el.classList.remove('journey-leg--highlighted');
+        void el.offsetWidth; // force reflow
+        el.classList.add('journey-leg--highlighted');
+    });
+}
+
 async function drawJourneyOnMap(journey) {
     if (!map) return;
     clearRouteLayers();
     routeLayerGroup = L.layerGroup().addTo(map);
+    legToPolylineMap = new Map();
 
     // Collect coordinate promises for legs that reference stop IDs
     const coordCache = {};
@@ -2353,9 +2414,10 @@ async function drawJourneyOnMap(journey) {
             // Prefer waypoints provided by the OTP server (leg.waypoints), then
             // try OpenRouteService, and finally fall back to a straight line.
             const walkStyle = { color: '#3E8EDE', weight: 3, opacity: 0.8, dashArray: '8,6' };
+            let walkPline = null;
             if (leg.waypoints && leg.waypoints.length > 1) {
                 // Use the detailed walking geometry supplied by OTP.
-                L.polyline(leg.waypoints, walkStyle).addTo(routeLayerGroup);
+                walkPline = L.polyline(leg.waypoints, walkStyle).addTo(routeLayerGroup);
             } else {
                 // Fall back to OpenRouteService or a straight line between the
                 // previous bus leg's last stop and the next bus leg's first stop.
@@ -2370,14 +2432,18 @@ async function drawJourneyOnMap(journey) {
                         console.log(`Routing walking leg from ${lastPoint} to ${nextBusCoords}`);
                         const routed = await routeAlongRoad(lastPoint, nextBusCoords, 'walking');
                         if (routed && routed.length) {
-                            L.polyline(routed, walkStyle).addTo(routeLayerGroup);
+                            walkPline = L.polyline(routed, walkStyle).addTo(routeLayerGroup);
                         } else {
-                            L.polyline([lastPoint, nextBusCoords], walkStyle).addTo(routeLayerGroup);
+                            walkPline = L.polyline([lastPoint, nextBusCoords], walkStyle).addTo(routeLayerGroup);
                         }
                     } catch (err) {
-                        L.polyline([lastPoint, nextBusCoords], walkStyle).addTo(routeLayerGroup);
+                        walkPline = L.polyline([lastPoint, nextBusCoords], walkStyle).addTo(routeLayerGroup);
                     }
                 }
+            }
+            if (walkPline) {
+                legToPolylineMap.set(leg, walkPline);
+                walkPline.on('click', () => highlightLegInPanel(leg));
             }
             // don't update lastPoint here; next bus leg will set it
             continue;
@@ -2414,9 +2480,13 @@ async function drawJourneyOnMap(journey) {
                 );
             }
             if (waypoints && waypoints.length > 1) {
-                L.polyline(waypoints, { color: legColor, weight: 4, opacity: 0.85 }).addTo(routeLayerGroup);
+                const pline = L.polyline(waypoints, { color: legColor, weight: 4, opacity: 0.85 }).addTo(routeLayerGroup);
+                legToPolylineMap.set(leg, pline);
+                pline.on('click', () => highlightLegInPanel(leg));
             } else {
-                L.polyline([a, b], { color: legColor, weight: 4, opacity: 0.85 }).addTo(routeLayerGroup);
+                const pline = L.polyline([a, b], { color: legColor, weight: 4, opacity: 0.85 }).addTo(routeLayerGroup);
+                legToPolylineMap.set(leg, pline);
+                pline.on('click', () => highlightLegInPanel(leg));
             }
             lastPoint = b;
         }
@@ -3105,6 +3175,20 @@ function renderJourneyList(journeys, departureDate) {
 
                 li.appendChild(timesDiv);
             }
+            // Bidirectional hover linking: store leg reference and wire up
+            // mouseenter/mouseleave to widen/restore the map polyline.
+            li._leg = leg;
+            const isWalkLeg = (leg.mode || 'bus') === 'walk';
+            const normalWeight = isWalkLeg ? 3 : 4;
+            const hoverWeight = isWalkLeg ? 5 : 7;
+            li.addEventListener('mouseenter', () => {
+                const pline = legToPolylineMap.get(leg);
+                if (pline) pline.setStyle({ weight: hoverWeight });
+            });
+            li.addEventListener('mouseleave', () => {
+                const pline = legToPolylineMap.get(leg);
+                if (pline) pline.setStyle({ weight: normalWeight });
+            });
             ul.appendChild(li);
         });
         legsEl.appendChild(ul);
