@@ -46,20 +46,45 @@ let activeMapInput = null;
  * on the relevant input so it stays visually selected even while dragging the map.
  */
 function setActiveMapInput(value) {
-    // Remove picking highlight from all known inputs
-    [fromInput, toInput].forEach(inp => inp && inp.classList.remove('map-input-picking'));
-    document.querySelectorAll('.stop-point-input').forEach(inp => inp.classList.remove('map-input-picking'));
+    const t = translations[currentLang] || translations.en;
+
+    // Remove picking highlight and restore original placeholders on all inputs
+    [fromInput, toInput].forEach(inp => {
+        if (!inp) return;
+        inp.classList.remove('map-input-picking');
+        if (inp._originalPlaceholder !== undefined) {
+            inp.placeholder = inp._originalPlaceholder;
+            delete inp._originalPlaceholder;
+        }
+    });
+    document.querySelectorAll('.stop-point-input').forEach(inp => {
+        inp.classList.remove('map-input-picking');
+        if (inp._originalPlaceholder !== undefined) {
+            inp.placeholder = inp._originalPlaceholder;
+            delete inp._originalPlaceholder;
+        }
+    });
 
     activeMapInput = value;
 
-    // Apply picking highlight to the newly active input
+    const mapPickPlaceholder = t.mapPickPlaceholder || 'Click on the map or start typing a stop name to set this location';
+
+    // Apply picking highlight and change placeholder on the newly active input
     if (value === 'from') {
         fromInput.classList.add('map-input-picking');
+        fromInput._originalPlaceholder = fromInput.placeholder;
+        fromInput.placeholder = mapPickPlaceholder;
     } else if (value === 'to') {
         toInput.classList.add('map-input-picking');
+        toInput._originalPlaceholder = toInput.placeholder;
+        toInput.placeholder = mapPickPlaceholder;
     } else if (value && value.type === 'stop') {
         const inp = document.querySelector(`.stop-point-input[data-idx="${value.idx}"]`);
-        if (inp) inp.classList.add('map-input-picking');
+        if (inp) {
+            inp.classList.add('map-input-picking');
+            inp._originalPlaceholder = inp.placeholder;
+            inp.placeholder = mapPickPlaceholder;
+        }
     }
 
     updateMapClickHint();
@@ -215,25 +240,8 @@ function showNotification(message) {
  * Called after each map click and after adding/clearing markers.
  */
 function updateMapClickHint() {
-    const hint = document.getElementById('mapClickHint');
-    if (!hint) return;
-    if (!uiSettings.showMapHints) {
-        hint.style.display = 'none';
-        return;
-    }
-    hint.style.display = 'block';
-    const t = translations[currentLang] || translations.en;
-    if (activeMapInput) {
-        hint.textContent = t.clickHintActiveInput || '🖱️ Click the map to set this location';
-        return;
-    }
-    if (!selectedStartItem && !selectedEndItem) {
-        hint.textContent = t.clickHintStart;
-    } else if (selectedStartItem && !selectedEndItem) {
-        hint.textContent = t.clickHintEnd;
-    } else {
-        hint.textContent = t.clickHintReset;
-    }
+    // The bottom-right map click hint has been removed.
+    // This function is kept as a no-op so existing callers don't break.
 }
 
 // Map / state variables
@@ -544,13 +552,26 @@ fromInput.addEventListener('input', () => {
     }, 2000);
 });
 
-// Hide suggestions when clicking outside
+// Hide suggestions when clicking outside and deselect active map input if click
+// is not on the map or a location input (prevents accidental map picks).
 document.addEventListener('click', (e) => {
     if (!fromSuggestions.contains(e.target) && e.target !== fromInput) {
         clearFromSuggestions();
     }
     if (!toSuggestions.contains(e.target) && e.target !== toInput) {
         clearToSuggestions();
+    }
+
+    // Deselect the active "click-on-map" input when the user clicks somewhere
+    // that is neither the map nor one of the location input boxes.
+    if (activeMapInput) {
+        const mapEl = document.getElementById('map');
+        const isMapClick = mapEl && mapEl.contains(e.target);
+        const isInputClick = e.target === fromInput || e.target === toInput
+            || e.target.classList.contains('stop-point-input');
+        if (!isMapClick && !isInputClick) {
+            setActiveMapInput(null);
+        }
     }
 });
 
@@ -735,17 +756,6 @@ function initializeLeafletMap() {
     });
     updateZoomHint();
 
-    // Map click hint control – shows what the next map click will do
-    const clickHintControl = L.control({ position: 'bottomright' });
-    clickHintControl.onAdd = function () {
-        const div = L.DomUtil.create('div', 'map-click-hint');
-        div.setAttribute('aria-live', 'polite');
-        div.id = 'mapClickHint';
-        return div;
-    };
-    clickHintControl.addTo(map);
-    updateMapClickHint();
-
     // Handle map single click: if a location input is focused and awaiting a map
     // click, fill it with the clicked coordinates and clear the active state.
     map.on('click', (e) => {
@@ -775,43 +785,6 @@ function initializeLeafletMap() {
             showNotification(t.mapClickNotifyStop || 'Via stop set.');
         }
         setActiveMapInput(null);
-    });
-
-    // Handle map double-clicks for start / end point selection.
-    // 1st double-click  → set start point
-    // 2nd double-click  → set end point
-    // 3rd+ double-click → reset start (clear existing end) so the user can pick a new route
-    map.on('dblclick', (e) => {
-        // If an input is awaiting a map click, the single-click handler above
-        // already handled it — ignore the double-click here.
-        if (activeMapInput) return;
-        const item = makeCustomItem(e.latlng);
-        const label = getLabelFromItem(item);
-        const t = translations[currentLang] || translations.en;
-        if (!selectedStartItem) {
-            if (fromInputTimer) { clearTimeout(fromInputTimer); fromInputTimer = null; }
-            fromInput.value = label;
-            clearFromSuggestions();
-            addStartMarker(item);
-            showNotification(t.mapClickNotifyStart);
-        } else if (!selectedEndItem) {
-            if (toInputTimer) { clearTimeout(toInputTimer); toInputTimer = null; }
-            toInput.value = label;
-            clearToSuggestions();
-            addEndMarker(item);
-            showNotification(t.mapClickNotifyEnd);
-        } else {
-            // Both already set — update start and clear end so the user can pick a new route
-            if (fromInputTimer) { clearTimeout(fromInputTimer); fromInputTimer = null; }
-            selectedEndItem = null;
-            toInput.value = '';
-            if (endMarker) { map.removeLayer(endMarker); endMarker = null; }
-            fromInput.value = label;
-            clearFromSuggestions();
-            addStartMarker(item);
-            showNotification(t.mapClickNotifyReset);
-        }
-        updateMapClickHint();
     });
 
     // Start live bus tracking with 30-second auto-refresh if enabled
@@ -1445,13 +1418,10 @@ const translations = {
         planningRoute: 'Planning route…',
         routePlanningError: 'Error planning route',
         routePlanningFailed: 'Failed to plan route. See console for details.',
-        clickHintStart: '🖱️ Double-click the map to set your start point',
-        clickHintEnd: '🖱️ Double-click the map to set your end point',
-        clickHintReset: '🖱️ Double-click the map to change your start point',
-        clickHintActiveInput: '🖱️ Click the map to set this location',
-        mapClickNotifyStart: 'Start point set. Now double-click your destination on the map.',
+        mapPickPlaceholder: 'Click on the map or start typing a stop name to set this location',
+        mapClickNotifyStart: 'Start point set.',
         mapClickNotifyEnd: "End point set. Click 'Plan Route' to continue.",
-        mapClickNotifyReset: 'Start point updated. Now double-click your destination on the map.',
+        mapClickNotifyReset: 'Start point updated.',
         mapClickNotifyStop: 'Via stop set.',
         stopDwellLabel: 'Stop time (min):',
         viewDepartures: 'View Departures',
@@ -1516,13 +1486,10 @@ const translations = {
         planningRoute: '正在规划路线…',
         routePlanningError: '路线规划出错',
         routePlanningFailed: '路线规划失败。请查看控制台了解详情。',
-        clickHintStart: '🖱️ 双击地图设置起点',
-        clickHintEnd: '🖱️ 双击地图设置终点',
-        clickHintReset: '🖱️ 双击地图更改起点',
-        clickHintActiveInput: '🖱️ 点击地图设置此位置',
-        mapClickNotifyStart: '起点已设置。请在地图上双击目的地。',
+        mapPickPlaceholder: '点击地图设置此位置',
+        mapClickNotifyStart: '起点已设置。',
         mapClickNotifyEnd: '终点已设置。点击"规划路线"继续。',
-        mapClickNotifyReset: '起点已更新。请在地图上双击目的地。',
+        mapClickNotifyReset: '起点已更新。',
         mapClickNotifyStop: '途经站点已设置。',
         stopDwellLabel: '停留时间（分钟）：',
         viewDepartures: '查看发车',

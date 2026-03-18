@@ -61,7 +61,6 @@
     /* Map overlays */
     --map-instructions-bg: rgba(46, 80, 144, 0.9);
     --map-zoom-hint-bg: rgba(16, 35, 69, 0.88);
-    --map-click-hint-bg: rgba(39, 100, 180, 0.88);
 
     /* Button hover / darker accent */
     --accent-color-hover: #229954;
@@ -839,7 +838,6 @@ body.high-contrast {
     /* Map overlays */
     --map-instructions-bg: rgba(0, 0, 0, 0.9);
     --map-zoom-hint-bg: rgba(0, 0, 0, 0.9);
-    --map-click-hint-bg: rgba(0, 0, 0, 0.9);
 
     /* Button hover / darker accent */
     --accent-color-hover: #005500;
@@ -1320,22 +1318,7 @@ body.high-contrast .input-group input.map-input-picking {
     margin-left: 10px;
 }
 
-/* Map click hint – shows whether the next click sets start, end, or resets start */
-.map-click-hint {
-    background: var(--map-click-hint-bg);
-    color: var(--white);
-    padding: 7px 12px;
-    border-radius: 5px;
-    font-size: 13px;
-    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
-    pointer-events: none;
-    white-space: nowrap;
-    margin-bottom: 10px;
-    margin-right: 10px;
-}
-
-body.hide-map-hints .bus-stop-zoom-hint,
-body.hide-map-hints .map-click-hint {
+body.hide-map-hints .bus-stop-zoom-hint {
     display: none !important;
 }
 
@@ -1760,8 +1743,13 @@ body.high-contrast .journey-departed-warning {
 }
 
 @keyframes leg-highlight-flash {
-    0% { background-color: var(--journey-leg-highlight-bg); }
-    100% { background-color: var(--journey-leg-bg); }
+    0% {
+        background-color: var(--journey-leg-highlight-bg);
+    }
+
+    100% {
+        background-color: var(--journey-leg-bg);
+    }
 }
 
 /* Leg header with route info and info button */
