@@ -37,6 +37,30 @@ let stopDwellTimes = [];   // dwell time (minutes) for each intermediate stop
 // null | 'from' | 'to' | { type: 'stop', idx: number }
 let activeMapInput = null;
 
+/**
+ * Set or clear the active map-input state and update the visual highlight class
+ * on the relevant input so it stays visually selected even while dragging the map.
+ */
+function setActiveMapInput(value) {
+    // Remove picking highlight from all known inputs
+    [fromInput, toInput].forEach(inp => inp && inp.classList.remove('map-input-picking'));
+    document.querySelectorAll('.stop-point-input').forEach(inp => inp.classList.remove('map-input-picking'));
+
+    activeMapInput = value;
+
+    // Apply picking highlight to the newly active input
+    if (value === 'from') {
+        fromInput.classList.add('map-input-picking');
+    } else if (value === 'to') {
+        toInput.classList.add('map-input-picking');
+    } else if (value && value.type === 'stop') {
+        const inp = document.querySelector(`.stop-point-input[data-idx="${value.idx}"]`);
+        if (inp) inp.classList.add('map-input-picking');
+    }
+
+    updateMapClickHint();
+}
+
 // Timers for debounced exact-match lookup
 let fromInputTimer = null;
 let toInputTimer = null;
@@ -514,16 +538,14 @@ window.addEventListener('scroll', () => {
     if (toSuggestions.style.display === 'block') positionToSuggestions();
 }, true);
 fromInput.addEventListener('focus', () => {
-    activeMapInput = 'from';
-    updateMapClickHint();
+    setActiveMapInput('from');
     if (fromSuggestions.children.length) {
         positionFromSuggestions();
         fromSuggestions.style.display = 'block';
     }
 });
 toInput.addEventListener('focus', () => {
-    activeMapInput = 'to';
-    updateMapClickHint();
+    setActiveMapInput('to');
     if (toSuggestions.children.length) {
         positionToSuggestions();
         toSuggestions.style.display = 'block';
@@ -725,8 +747,7 @@ function initializeLeafletMap() {
             clearStopSuggestions(idx);
             showNotification(t.mapClickNotifyStop || 'Via stop set.');
         }
-        activeMapInput = null;
-        updateMapClickHint();
+        setActiveMapInput(null);
     });
 
     // Handle map double-clicks for start / end point selection.
@@ -2139,8 +2160,7 @@ function addStopRow() {
 
     // Set this stop as the active map input when focused, so clicking the map fills it
     input.addEventListener('focus', () => {
-        activeMapInput = { type: 'stop', idx: parseInt(input.dataset.idx, 10) };
-        updateMapClickHint();
+        setActiveMapInput({ type: 'stop', idx: parseInt(input.dataset.idx, 10) });
     });
 
     input.focus();
@@ -2265,8 +2285,7 @@ function removeStopRow(row, removedIdx) {
 
     // If the removed stop was the active map input, clear it
     if (activeMapInput && activeMapInput.type === 'stop') {
-        activeMapInput = null;
-        updateMapClickHint();
+        setActiveMapInput(null);
     }
 
     refreshAddStopBtn();
