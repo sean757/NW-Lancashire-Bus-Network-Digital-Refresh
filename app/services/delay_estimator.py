@@ -517,8 +517,114 @@ async def estimate_leg_delay(
     delay_secs = current_secs - sched_time
     delay_mins = round(delay_secs / 60)
 
+    status = "on_time" if abs(delay_mins) <= 1 else "delayed"
+
     return {
         "delay_mins": delay_mins,
         "source": "live_position",
+        "status": status,
         "vehicle_id": dvjr_vehicle.get("vehicle_id"),
     }
+
+
+# =====================================================================
+#  Rail delay estimation (Darwin departure board)
+# =====================================================================
+
+async def estimate_rail_leg_delay(
+    origin_crs: Optional[str],
+    departure_time: Optional[str],
+    destination_crs: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """Estimate the delay for a rail leg using the Darwin departure board.
+
+    Unlike buses (where delay must be inferred from GPS positions), rail
+    delays are reported *exactly* by the Darwin feed.  We simply fetch the
+    departure board for the origin station, find the service whose
+    scheduled departure time matches, and read its estimated time.
+
+    Returns ``{"delay_mins": int, "source": "darwin", ...}`` or ``None``.
+    """
+    if not origin_crs or not departure_time:
+        return None
+
+    from app.services.rail_feed import rail_feed
+
+    board = await rail_feed.get_departures(origin_crs)
+    if board.get("error") or not board.get("train_services"):
+        return None
+
+    # Parse the OTP departure time (HH:MM:SS or HH:MM) to HH:MM for matching.
+    dep_parts = departure_time.strip().split(":")
+    if len(dep_parts) < 2:
+        return None
+    dep_hhmm = f"{int(dep_parts[0]):02d}:{int(dep_parts[1]):02d}"
+
+    best_match = None
+    best_score = -1  # higher is better
+
+    for svc in board["train_services"]:
+        sched = svc.get("scheduled_departure") or ""
+        if sched != dep_hhmm:
+            continue
+
+        # Matched on departure time.  If we also know the destination CRS,
+        # use it to disambiguate when multiple services depart at the same
+        # time (common at major stations like Preston).
+        score = 1
+        if destination_crs:
+            dests = {d["crs"].upper() for d in (svc.get("destinations") or [])}
+            # Also check calling points for through-services
+            cp_crss = {
+                cp["crs"].upper()
+                for cp in (svc.get("calling_points") or [])
+                if cp.get("crs")
+            }
+            if destination_crs.upper() in dests:
+                score = 10  # exact destination match
+            elif destination_crs.upper() in cp_crss:
+                score = 5   # destination is a calling point
+
+        if score > best_score:
+            best_score = score
+            best_match = svc
+
+    if best_match is None:
+        return None
+
+    delay = best_match.get("departure_delay_minutes")
+    is_cancelled = best_match.get("is_cancelled", False)
+
+    result: Dict[str, Any] = {
+        "source": "darwin",
+        "service_id": best_match.get("service_id"),
+        "operator": best_match.get("operator"),
+        "platform": best_match.get("platform"),
+        "is_cancelled": is_cancelled,
+    }
+
+    if is_cancelled:
+        result["delay_mins"] = None
+        result["status"] = "cancelled"
+        result["cancel_reason"] = best_match.get("cancel_reason")
+    elif delay is not None:
+        result["delay_mins"] = delay
+        result["status"] = "on_time" if delay == 0 else "delayed"
+        if best_match.get("delay_reason"):
+            result["delay_reason"] = best_match["delay_reason"]
+        result["estimated_departure"] = best_match.get("estimated_departure")
+    else:
+        # "Delayed" with no specific time
+        result["delay_mins"] = None
+        result["status"] = "delayed"
+        result["estimated_departure"] = best_match.get("estimated_departure")
+
+    # Include calling-point delay propagation if available.
+    if destination_crs and best_match.get("calling_points"):
+        for cp in best_match["calling_points"]:
+            if (cp.get("crs") or "").upper() == destination_crs.upper():
+                result["destination_delay_minutes"] = cp.get("delay_minutes")
+                result["destination_estimated_time"] = cp.get("estimated_time")
+                break
+
+    return result

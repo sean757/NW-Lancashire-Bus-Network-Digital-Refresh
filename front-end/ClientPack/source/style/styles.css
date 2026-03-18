@@ -1890,6 +1890,36 @@ body.high-contrast .journey-leg-schedule-badge {
     border-color: #000;
 }
 
+/* Rail platform badge */
+.journey-leg-platform-badge {
+    display: inline-block;
+    margin-left: 8px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 0.82em;
+    font-weight: 600;
+    vertical-align: middle;
+    white-space: nowrap;
+    background: #d6eaf8;
+    color: #1a5276;
+    border: 1px solid #5dade2;
+}
+
+body.high-contrast .journey-leg-platform-badge {
+    background: #cff;
+    color: #000;
+    border-color: #000;
+}
+
+/* Delay reason text (shown below badge) */
+.journey-leg-delay-reason {
+    display: block;
+    margin-top: 4px;
+    font-size: 0.8em;
+    color: #856404;
+    font-style: italic;
+}
+
 /* "View on map" button row at bottom of each card */
 .journey-btn-row {
     margin-top: 12px;

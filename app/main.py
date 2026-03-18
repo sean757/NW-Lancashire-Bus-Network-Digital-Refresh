@@ -10,13 +10,15 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from app.config import settings
 from app.database import init_db, close_db
-from app.routers import stops, disruptions, journey, routes
+from app.routers import stops, disruptions, journey, routes, rail
 from app.services.route_cache import route_cache
 from app.services.vehicle_cache import vehicle_cache
+from app.services.trust_listener import trust_listener
 import httpx
 
 # Path to the front-end directory (app/ sits one level below the project root)
-FRONTEND_DIR = os.path.realpath(os.path.join(os.path.dirname(__file__), "..", "front-end"))
+FRONTEND_DIR = os.path.realpath(os.path.join(
+    os.path.dirname(__file__), "..", "front-end"))
 _FRONTEND_INDEX = os.path.join(FRONTEND_DIR, "index.html")
 
 
@@ -46,10 +48,13 @@ async def startup():
     # The initial fetch ensures data is available immediately on first user request.
     await vehicle_cache.refresh()
     asyncio.create_task(vehicle_cache.refresh_loop())
+    # Start the TRUST STOMP listener for live rail movement data.
+    trust_listener.start()
 
 
 @app.on_event("shutdown")
 async def shutdown():
+    trust_listener.stop()
     await close_db()
 
 
@@ -92,6 +97,7 @@ app.include_router(disruptions.router,
                    prefix="/api/v1/disruptions", tags=["Disruptions"])
 app.include_router(journey.router, prefix="/api/v1/journey", tags=["Journey"])
 app.include_router(routes.router, prefix="/api/v1/routes", tags=["Routes"])
+app.include_router(rail.router, prefix="/api/v1/rail", tags=["Rail"])
 
 
 # ==========================================

@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.services import otp_client
 from app.services.route_cache import route_cache
-from app.services.delay_estimator import estimate_leg_delay
+from app.services.delay_estimator import estimate_leg_delay, estimate_rail_leg_delay
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -371,11 +371,28 @@ async def plan_journey(req: JourneyRequest, db: AsyncSession = Depends(get_db)):
                         leg["rail_service_destination"] = dest_name
 
     # -----------------------------------------------------------------------
-    # Live delay annotation — augment transit legs with delay estimates
-    # derived from the in-memory vehicle cache (SIRI feed).
+    # Live delay annotation — augment transit legs with delay estimates.
+    # Bus legs: SIRI vehicle positions + timetable interpolation.
+    # Rail legs: Darwin departure board (exact reported delays).
     # -----------------------------------------------------------------------
     # (route_id, direction, origin_stop, dep_time) -> result
     delay_cache: dict = {}
+
+    # Pre-build a stop_id → CRS lookup for rail legs (from DB cache).
+    _stop_crs_cache: dict = {}
+
+    async def _get_crs(stop_id: str) -> Optional[str]:
+        if stop_id in _stop_crs_cache:
+            return _stop_crs_cache[stop_id]
+        row = (await db.execute(
+            text(
+                "SELECT crs_code FROM stops WHERE stop_id = :sid AND crs_code IS NOT NULL LIMIT 1"),
+            {"sid": stop_id},
+        )).mappings().first()
+        crs = (row["crs_code"] if row else None)
+        _stop_crs_cache[stop_id] = crs
+        return crs
+
     for journey in journeys:
         for leg in (journey.get("legs") or []):
             mode = (leg.get("mode") or "").lower()
@@ -389,9 +406,29 @@ async def plan_journey(req: JourneyRequest, db: AsyncSession = Depends(get_db)):
             dep_time_str = leg.get("departure_time")
 
             delay_key = (route_id, direction, origin_stop, dep_time_str)
-            if delay_key not in delay_cache:
+            if delay_key in delay_cache:
+                result = delay_cache[delay_key]
+            elif mode == "rail":
+                # --- Rail: use Darwin departure board for exact delay ---
                 try:
-                    delay_cache[delay_key] = await estimate_leg_delay(
+                    origin_crs = await _get_crs(origin_stop) if origin_stop else None
+                    dest_stop = leg.get("destination_stop_id")
+                    dest_crs = await _get_crs(dest_stop) if dest_stop else None
+                    result = await estimate_rail_leg_delay(
+                        origin_crs=origin_crs,
+                        departure_time=dep_time_str,
+                        destination_crs=dest_crs,
+                    )
+                    delay_cache[delay_key] = result
+                except Exception as exc:
+                    logger.warning(
+                        "Rail delay estimation failed for %s: %s", route_id, exc)
+                    result = None
+                    delay_cache[delay_key] = None
+            else:
+                # --- Bus: SIRI vehicle position interpolation ---
+                try:
+                    result = await estimate_leg_delay(
                         route_id=route_id,
                         route_name=route_name,
                         direction=direction,
@@ -399,18 +436,42 @@ async def plan_journey(req: JourneyRequest, db: AsyncSession = Depends(get_db)):
                         departure_time=dep_time_str,
                         travel_date=dep_date,
                     )
+                    delay_cache[delay_key] = result
                 except Exception as exc:
                     logger.warning(
                         "Delay estimation failed for %s: %s", route_id, exc)
+                    result = None
                     delay_cache[delay_key] = None
 
-            result = delay_cache[delay_key]
             if result is not None:
-                leg["estimated_delay_mins"] = result["delay_mins"]
-                leg["delay_source"] = result["source"]
+                leg["estimated_delay_mins"] = result.get("delay_mins")
+                leg["delay_source"] = result.get("source", "live")
+
+                # Unified status field: "on_time" | "delayed" | "cancelled" | "schedule"
+                leg["realtime_status"] = result.get("status", "unknown")
+
+                # Rail-specific fields from Darwin
+                if result.get("is_cancelled"):
+                    leg["is_cancelled"] = True
+                    leg["cancel_reason"] = result.get("cancel_reason")
+                if result.get("delay_reason"):
+                    leg["delay_reason"] = result["delay_reason"]
+                if result.get("platform"):
+                    leg["platform"] = result["platform"]
+                if result.get("estimated_departure"):
+                    leg["estimated_departure"] = result["estimated_departure"]
+                if result.get("service_id"):
+                    leg["service_id"] = result["service_id"]
+                if result.get("operator"):
+                    leg["operator"] = result["operator"]
+                if result.get("destination_delay_minutes") is not None:
+                    leg["destination_delay_mins"] = result["destination_delay_minutes"]
+                    leg["destination_estimated_time"] = result.get(
+                        "destination_estimated_time")
             else:
                 leg["estimated_delay_mins"] = None
                 leg["delay_source"] = "schedule"
+                leg["realtime_status"] = "schedule"
 
     return {
         "origin": {"stop_id": origin_stop_id, "name": origin_name},

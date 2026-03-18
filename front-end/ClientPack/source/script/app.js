@@ -2685,11 +2685,21 @@ function openLegDetailsModal(leg, modeLabel, operatorName, routeName) {
         const delayLabel = document.createElement('strong');
         delayLabel.textContent = 'Live Status:';
         const delayValue = document.createElement('div');
+        const isLiveSource = leg.delay_source === 'live_position' || leg.delay_source === 'darwin';
+        const isDarwin = leg.delay_source === 'darwin';
 
-        if (leg.estimated_delay_mins != null && leg.estimated_delay_mins > 0) {
-            delayValue.innerHTML = `<span class="journey-leg-delay-badge">⚠️ Estimated ~${leg.estimated_delay_mins} min delay</span>`;
-        } else if (leg.estimated_delay_mins === 0 && leg.delay_source === 'live_position') {
-            delayValue.innerHTML = `<span class="journey-leg-ontime-badge">✅ On time (live data)</span>`;
+        if (leg.is_cancelled) {
+            let cancelHTML = `<span class="journey-leg-delay-badge">❌ Cancelled</span>`;
+            if (leg.cancel_reason) cancelHTML += `<div class="journey-leg-delay-reason">${leg.cancel_reason}</div>`;
+            delayValue.innerHTML = cancelHTML;
+        } else if (leg.estimated_delay_mins != null && leg.estimated_delay_mins > 0) {
+            let delayHTML = `<span class="journey-leg-delay-badge">⚠️ Estimated ~${leg.estimated_delay_mins} min delay</span>`;
+            if (leg.estimated_departure) delayHTML += `<div>Expected departure: <strong>${leg.estimated_departure}</strong></div>`;
+            if (leg.delay_reason) delayHTML += `<div class="journey-leg-delay-reason">${leg.delay_reason}</div>`;
+            delayValue.innerHTML = delayHTML;
+        } else if (leg.estimated_delay_mins === 0 && isLiveSource) {
+            const src = isDarwin ? 'National Rail live feed' : 'live vehicle position';
+            delayValue.innerHTML = `<span class="journey-leg-ontime-badge">✅ On time</span> <small>(${src})</small>`;
         } else {
             delayValue.innerHTML = `<span class="journey-leg-schedule-badge">📅 Scheduled times (no live data available)</span>`;
         }
@@ -2697,6 +2707,32 @@ function openLegDetailsModal(leg, modeLabel, operatorName, routeName) {
         delaySection.appendChild(delayLabel);
         delaySection.appendChild(delayValue);
         body.appendChild(delaySection);
+
+        // Rail-specific extra detail
+        if (isDarwin) {
+            const railDetail = document.createElement('div');
+            railDetail.className = 'leg-modal-section';
+            const railLabel = document.createElement('strong');
+            railLabel.textContent = 'Rail Service Detail:';
+            let detailHTML = '';
+            if (leg.platform) detailHTML += `<div>🚏 Platform <strong>${leg.platform}</strong></div>`;
+            if (leg.operator) detailHTML += `<div>Operator: ${leg.operator}</div>`;
+            if (leg.service_id) detailHTML += `<div>Service ID: <code>${leg.service_id}</code></div>`;
+            if (leg.destination_delay_mins != null) {
+                const destStatus = leg.destination_delay_mins === 0
+                    ? '✅ On time at destination'
+                    : `⚠️ ~${leg.destination_delay_mins} min delay at destination`;
+                detailHTML += `<div>${destStatus}</div>`;
+                if (leg.destination_estimated_time) detailHTML += `<div>Estimated arrival: <strong>${leg.destination_estimated_time}</strong></div>`;
+            }
+            if (detailHTML) {
+                const railValue = document.createElement('div');
+                railValue.innerHTML = detailHTML;
+                railDetail.appendChild(railLabel);
+                railDetail.appendChild(railValue);
+                body.appendChild(railDetail);
+            }
+        }
     }
 
     // Additional info message
@@ -3162,17 +3198,35 @@ function renderJourneyList(journeys, departureDate) {
                 }
 
                 // Live delay badge
-                if (leg.estimated_delay_mins != null && leg.estimated_delay_mins > 0) {
+                const isLiveSource = leg.delay_source === 'live_position' || leg.delay_source === 'darwin';
+                const isDarwin = leg.delay_source === 'darwin';
+
+                if (leg.is_cancelled) {
+                    const cancelBadge = document.createElement('span');
+                    cancelBadge.className = 'journey-leg-delay-badge';
+                    cancelBadge.textContent = '❌ Cancelled';
+                    cancelBadge.title = leg.cancel_reason || 'This service has been cancelled';
+                    timesDiv.appendChild(cancelBadge);
+                } else if (leg.estimated_delay_mins != null && leg.estimated_delay_mins > 0) {
                     const delayBadge = document.createElement('span');
                     delayBadge.className = 'journey-leg-delay-badge';
+                    const src = isDarwin ? 'Darwin live feed' : 'live vehicle position data';
                     delayBadge.textContent = `⚠️ ~${leg.estimated_delay_mins} min delay`;
-                    delayBadge.title = 'Estimated from live vehicle position data';
+                    delayBadge.title = `Estimated from ${src}`;
                     timesDiv.appendChild(delayBadge);
-                } else if (leg.estimated_delay_mins === 0 && leg.delay_source === 'live_position') {
+                    if (leg.delay_reason) {
+                        const reasonEl = document.createElement('span');
+                        reasonEl.className = 'journey-leg-delay-reason';
+                        reasonEl.textContent = leg.delay_reason;
+                        timesDiv.appendChild(reasonEl);
+                    }
+                } else if (leg.estimated_delay_mins === 0 && isLiveSource) {
                     const onTimeBadge = document.createElement('span');
                     onTimeBadge.className = 'journey-leg-ontime-badge';
                     onTimeBadge.textContent = '✅ On time';
-                    onTimeBadge.title = 'Vehicle is on schedule based on live position';
+                    onTimeBadge.title = isDarwin
+                        ? 'Confirmed on time by National Rail'
+                        : 'Vehicle is on schedule based on live position';
                     timesDiv.appendChild(onTimeBadge);
                 } else if (leg.delay_source === 'schedule') {
                     const schedBadge = document.createElement('span');
@@ -3180,6 +3234,14 @@ function renderJourneyList(journeys, departureDate) {
                     schedBadge.textContent = '📅 Scheduled';
                     schedBadge.title = 'No live data available — times are from the timetable';
                     timesDiv.appendChild(schedBadge);
+                }
+
+                // Rail-specific: show platform number
+                if (isDarwin && leg.platform) {
+                    const platBadge = document.createElement('span');
+                    platBadge.className = 'journey-leg-platform-badge';
+                    platBadge.textContent = `Platform ${leg.platform}`;
+                    timesDiv.appendChild(platBadge);
                 }
 
                 li.appendChild(timesDiv);
