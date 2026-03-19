@@ -38,6 +38,7 @@ async def list_stops(
         WHERE active = TRUE
           AND latitude  BETWEEN :svc_min_lat AND :svc_max_lat
           AND longitude BETWEEN :svc_min_lon AND :svc_max_lon
+          AND (stop_type != 'rail' OR stop_id LIKE '9100%%')
     """
     params = _service_bounds_params()
 
@@ -71,6 +72,7 @@ async def search_stops(
         WHERE active = TRUE
                     AND latitude  BETWEEN :svc_min_lat AND :svc_max_lat
                     AND longitude BETWEEN :svc_min_lon AND :svc_max_lon
+          AND (stop_type != 'rail' OR stop_id LIKE '9100%%')
           AND to_tsvector('english', stop_name) @@ plainto_tsquery('english', :q)
         ORDER BY ts_rank(to_tsvector('english', stop_name), plainto_tsquery('english', :q)) DESC
         LIMIT :limit
@@ -91,6 +93,7 @@ async def search_stops(
                 WHERE active = TRUE
                   AND latitude  BETWEEN :svc_min_lat AND :svc_max_lat
                   AND longitude BETWEEN :svc_min_lon AND :svc_max_lon
+                  AND (stop_type != 'rail' OR stop_id LIKE '9100%%')
                   AND ({or_clauses})
                 ORDER BY stop_name
                 LIMIT :limit
@@ -111,6 +114,7 @@ async def search_stops(
             WHERE active = TRUE
               AND latitude  BETWEEN :svc_min_lat AND :svc_max_lat
               AND longitude BETWEEN :svc_min_lon AND :svc_max_lon
+              AND (stop_type != 'rail' OR stop_id LIKE '9100%%')
               AND stop_name ILIKE :pattern
             ORDER BY stop_name
             LIMIT :limit
@@ -161,6 +165,7 @@ async def nearby_stops(
             WHERE active = TRUE
               AND latitude  BETWEEN :svc_min_lat AND :svc_max_lat
               AND longitude BETWEEN :svc_min_lon AND :svc_max_lon
+              AND (stop_type != 'rail' OR stop_id LIKE '9100%')
         ) AS nearby
         WHERE distance_km <= :radius_km
         ORDER BY distance_km
@@ -206,6 +211,7 @@ async def stops_in_bounds(
             WHERE active = TRUE
                 AND latitude  BETWEEN :min_lat AND :max_lat
                 AND longitude BETWEEN :min_lon AND :max_lon
+                AND (stop_type != 'rail' OR stop_id LIKE '9100%')
             ORDER BY stop_name
             LIMIT :limit
     """
@@ -215,30 +221,7 @@ async def stops_in_bounds(
         "limit": limit,
     })
     rows = result.mappings().all()
-
-    # Deduplicate rail stops by CRS code so only one station marker appears.
-    rail_by_crs = {}
-    output = []
-    for row in rows:
-        stop = dict(row)
-        if (stop.get("stop_type") or "").lower() == "rail" and stop.get("crs_code"):
-            crs = stop["crs_code"].upper()
-            existing = rail_by_crs.get(crs)
-            if not existing:
-                rail_by_crs[crs] = stop
-            else:
-                # Prefer the main station entry (often 9100 prefix) over entrances.
-                def _is_primary(s):
-                    return str(s.get("stop_id") or "").startswith("9100")
-
-                if _is_primary(stop) and not _is_primary(existing):
-                    rail_by_crs[crs] = stop
-            continue
-
-        output.append(stop)
-
-    output.extend(rail_by_crs.values())
-    return output
+    return [dict(row) for row in rows]
 
 
 @router.get("/{stop_id}")

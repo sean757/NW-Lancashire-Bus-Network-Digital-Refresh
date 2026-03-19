@@ -25,6 +25,10 @@ _OPERATORS = ["ARCT", "BLAC", "KLCO", "SCCU", "SCMY", "NUTT"]
 # reasonably fresh data without adding extra upstream load.
 REFRESH_INTERVAL_SECS = 30
 
+# Keep stale per-operator data for up to this many seconds when the feed
+# fails, so intermittent upstream errors don't immediately wipe the cache.
+_STALE_THRESHOLD_SECS = 300
+
 
 class VehicleCache:
     """In-memory cache of live vehicle positions fetched from the SIRI feed."""
@@ -34,15 +38,18 @@ class VehicleCache:
         self.vehicles: list[dict] = []
         # UTC timestamp of the most recent successful fetch, or None.
         self.last_updated: datetime | None = None
+        # Per-operator tracking for resilient merging.
+        self._per_operator: dict[str, list[dict]] = {}
+        self._per_operator_updated: dict[str, datetime] = {}
 
-    async def fetch(self) -> list[dict]:
+    async def fetch(self) -> dict[str, list[dict]]:
         """Fetch and parse live vehicle positions from the SCC SIRI feed.
 
-        Returns a list of vehicle dicts (same schema as the original endpoint).
-        Errors for individual operators are logged and skipped so a partial
-        failure does not prevent the remaining operators from being returned.
+        Returns a dict mapping operator NOC code to a list of vehicle dicts.
+        Operators whose feed failed (network error, non-XML response, etc.)
+        are omitted from the result so the caller can keep stale data.
         """
-        vehicles: list[dict] = []
+        result: dict[str, list[dict]] = {}
 
         async with httpx.AsyncClient(verify=False, timeout=10) as client:  # noqa: S501 – university SIRI endpoint uses a non-standard cert
             for noc in _OPERATORS:
@@ -50,12 +57,25 @@ class VehicleCache:
                 try:
                     response = await client.get(url)
                     if response.status_code != 200:
+                        logger.warning(
+                            "SIRI feed for %s returned HTTP %d", noc, response.status_code
+                        )
+                        continue
+
+                    content_type = response.headers.get('content-type', '')
+                    if 'xml' not in content_type:
+                        logger.warning(
+                            "SIRI feed for %s returned non-XML content-type: %s "
+                            "(possible upstream error page); skipping",
+                            noc, content_type,
+                        )
                         continue
 
                     root = etree.fromstring(response.content)
                     activities = root.xpath(
                         './/siri:VehicleActivity', namespaces=_SIRI_NS
                     )
+                    vehicles: list[dict] = []
 
                     for activity in activities:
                         journey = activity.find(
@@ -140,6 +160,8 @@ class VehicleCache:
                             'dated_vehicle_journey_ref': dated_vehicle_journey_ref,
                         })
 
+                    result[noc] = vehicles
+
                 except (httpx.HTTPError, etree.XMLSyntaxError) as exc:
                     logger.warning(
                         "Failed to fetch/parse SIRI feed for operator %s: %s", noc, exc
@@ -151,14 +173,42 @@ class VehicleCache:
                         exc,
                     )
 
-        return vehicles
+        return result
 
     async def refresh(self) -> None:
-        """Perform a single fetch and update the in-memory cache."""
-        vehicles = await self.fetch()
-        self.vehicles = vehicles
-        self.last_updated = datetime.now(timezone.utc)
-        logger.debug("Vehicle cache refreshed: %d vehicles", len(vehicles))
+        """Perform a single fetch and update the in-memory cache.
+
+        Uses a per-operator merge strategy: only operators that returned a
+        valid response have their data replaced.  Operators whose feed
+        failed keep their last-good data for up to ``_STALE_THRESHOLD_SECS``
+        seconds, preventing intermittent upstream errors from immediately
+        wiping the cache.
+        """
+        fetched = await self.fetch()
+        now = datetime.now(timezone.utc)
+
+        # Update per-operator data for operators that returned a valid response.
+        for noc, op_vehicles in fetched.items():
+            self._per_operator[noc] = op_vehicles
+            self._per_operator_updated[noc] = now
+
+        # Rebuild flat vehicle list, dropping operators whose data is too stale.
+        all_vehicles: list[dict] = []
+        for noc in list(self._per_operator):
+            updated = self._per_operator_updated.get(noc, now)
+            age = (now - updated).total_seconds()
+            if age <= _STALE_THRESHOLD_SECS:
+                all_vehicles.extend(self._per_operator[noc])
+            else:
+                logger.warning(
+                    "Dropping stale vehicle data for %s (age=%.0fs)", noc, age,
+                )
+                del self._per_operator[noc]
+                del self._per_operator_updated[noc]
+
+        self.vehicles = all_vehicles
+        self.last_updated = now
+        logger.debug("Vehicle cache refreshed: %d vehicles", len(all_vehicles))
 
     async def refresh_loop(self, interval_secs: int = REFRESH_INTERVAL_SECS) -> None:
         """Background task: refresh the cache every *interval_secs* seconds.

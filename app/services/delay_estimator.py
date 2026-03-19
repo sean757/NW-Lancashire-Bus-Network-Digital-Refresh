@@ -105,6 +105,12 @@ def _find_vehicles_on_route(
     target_dir = (direction or "").strip().lower()
     matches = []
     for v in vehicle_cache.vehicles:
+        # Skip vehicles with missing or clearly invalid GPS coordinates
+        # (the SIRI feed sometimes returns 0,0 for vehicles whose GPS is unavailable).
+        vlat = v.get("latitude")
+        vlon = v.get("longitude")
+        if vlat is None or vlon is None or (vlat == 0.0 and vlon == 0.0):
+            continue
         line = (v.get("line_ref") or v.get("line_name") or "").strip().upper()
         if line != target:
             continue
@@ -347,6 +353,78 @@ def _interpolate_scheduled_time(
     return dep_a + fraction * (arr_b - dep_a)
 
 
+def _propagate_route_delay(
+    vehicles: list[dict],
+    route_id: str,
+    origin_stop_id: str,
+    dep_secs: int,
+    current_secs: int,
+) -> Optional[Dict[str, Any]]:
+    """Propagate delay from the nearest vehicle on the same route.
+
+    When no vehicle is matched to the user's specific trip (e.g. the trip
+    hasn't started yet), this finds the closest vehicle on the same route
+    and computes its current delay.  That delay is returned as a
+    ``route_estimate`` — a reasonable proxy for future departures on the
+    same line.
+    """
+    best_vehicle = None
+    best_diff = float("inf")
+    best_trip = None
+
+    for vehicle in vehicles:
+        resolved = _get_trip_for_vehicle(vehicle)
+        if not resolved:
+            continue
+        v_trip_id, v_route_id = resolved
+        if v_route_id != route_id:
+            continue
+        stop_info = route_cache.trip_stop_seq.get(
+            (v_trip_id, origin_stop_id))
+        if not stop_info:
+            continue
+        trip_dep = stop_info[2]
+        diff = abs(trip_dep - dep_secs)
+        if diff < best_diff:
+            best_diff = diff
+            best_vehicle = vehicle
+            best_trip = v_trip_id
+
+    if not best_vehicle or best_diff > 3600:  # within 1 hour
+        return None
+
+    trip_stops = route_cache.trip_stops_sorted.get(best_trip, [])
+    if not trip_stops or len(trip_stops) < 2:
+        return None
+
+    vlat = best_vehicle.get("latitude")
+    vlon = best_vehicle.get("longitude")
+    if vlat is None or vlon is None:
+        return None
+
+    segment = _find_vehicle_on_trip_route(vlat, vlon, best_trip)
+    if segment is None:
+        return None
+    seg_index, fraction, perp_dist = segment
+    if perp_dist > _MAX_ROUTE_DISTANCE_KM:
+        return None
+
+    sched_time = _interpolate_scheduled_time(best_trip, seg_index, fraction)
+    if sched_time is None:
+        return None
+
+    delay_secs = current_secs - sched_time
+    delay_mins = round(delay_secs / 60)
+    status = "on_time" if abs(delay_mins) <= 1 else "delayed"
+
+    return {
+        "delay_mins": delay_mins,
+        "source": "route_estimate",
+        "status": status,
+        "vehicle_id": best_vehicle.get("vehicle_id"),
+    }
+
+
 async def estimate_leg_delay(
     route_id: str,
     route_name: str,
@@ -403,7 +481,8 @@ async def estimate_leg_delay(
     # This avoids the problem of duplicate trip_ids for the same physical
     # departure (different day-of-week variants).
     # ------------------------------------------------------------------
-    _DEP_MATCH_WINDOW = 900  # 15 minutes
+    _DEP_MATCH_WINDOW = 900   # 15 minutes
+    _NOT_STARTED_WINDOW = 2700  # 45 minutes lookahead for trips not yet started
 
     dvjr_vehicle = None
     dvjr_trip_id = None
@@ -448,7 +527,7 @@ async def estimate_leg_delay(
         _user_stop_info = route_cache.trip_stop_seq.get(
             (trip_id, origin_stop_id))
         if _user_stop_info:
-            if current_secs < _user_stop_info[2] - 900:
+            if current_secs < _user_stop_info[2] - _NOT_STARTED_WINDOW:
                 return None
 
         best_aimed_diff = float("inf")
@@ -475,7 +554,7 @@ async def estimate_leg_delay(
                 if not o_ok and not d_ok:
                     continue
 
-            if aimed_diff < best_aimed_diff:
+            if aimed_diff < best_aimed_diff or (dvjr_vehicle is None and aimed_diff <= best_aimed_diff):
                 best_aimed_diff = aimed_diff
                 dvjr_vehicle = vehicle
                 dvjr_trip_id = trip_id
@@ -483,12 +562,17 @@ async def estimate_leg_delay(
         trip_id = dvjr_trip_id
 
     if dvjr_vehicle is None or dvjr_trip_id is None:
-        return None
+        # ---- Route-level delay propagation fallback ----
+        # No specific trip/vehicle match, but we have live vehicles on
+        # this route.  Compute the delay for the nearest vehicle on the
+        # same route and propagate it as an estimate for this departure.
+        return _propagate_route_delay(
+            vehicles, route_id, origin_stop_id, dep_secs, current_secs)
 
     # Trip-not-started guard (DVJR path)
     _user_stop_info = route_cache.trip_stop_seq.get(
         (dvjr_trip_id, origin_stop_id))
-    if _user_stop_info and current_secs < _user_stop_info[2] - 900:
+    if _user_stop_info and current_secs < _user_stop_info[2] - _NOT_STARTED_WINDOW:
         return None
 
     trip_stops = route_cache.trip_stops_sorted.get(dvjr_trip_id, [])
