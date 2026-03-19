@@ -138,12 +138,6 @@ Set the OTP URL before starting the API server:
 export OTP_URL=http://localhost:9090
 ```
 
-Or add it to a `.env` file in the project root:
-
-```ini
-OTP_URL=http://localhost:9090
-```
-
 ### 10. Start the API server
 
 ```bash

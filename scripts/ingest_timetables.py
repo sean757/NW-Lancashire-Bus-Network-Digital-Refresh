@@ -534,11 +534,18 @@ def parse_txc_xml(conn, xml_content, operator_code, valid_stops, stop_coords, pr
         days_elem = vj.find('.//txc:DaysOfWeek', namespaces=NS)
         days_bitmask = days_to_bitmask(days_elem)
 
-        # Build a globally unique trip_id per logical route.
+        # Build a globally unique trip_id per logical route AND operating
+        # period.  The same VehicleJourneyCode (e.g. VJ337) is reused across
+        # multiple XML files that cover different date ranges.  Without the
+        # period tag the unique constraint (route_id, trip_id, stop_sequence)
+        # causes ON CONFLICT DO NOTHING to silently merge or drop stops from
+        # later files, producing corrupted Frankenstein trips that mix stop
+        # sequences from unrelated journeys.
+        period_tag = (start_date or "").replace("-", "")
         trip_id = (
-            f"{route_id}_{vj_code}"
+            f"{route_id}_{vj_code}_{period_tag}"
             if vj_code
-            else f"{route_id}_{departure_str}_{direction}"
+            else f"{route_id}_{departure_str}_{direction}_{period_tag}"
         )
 
         # Calculate arrival/departure times from link runtime + wait (loitering)

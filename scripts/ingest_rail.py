@@ -399,6 +399,13 @@ def _flush_routes(conn, route_rows: Iterable[Dict[str, str]]) -> None:
 
 
 def _flush_timetables(conn, rows: List[Tuple]) -> None:
+    # Deduplicate within the batch: keep last row per (route_id, trip_id, stop_sequence)
+    seen: Dict[Tuple, Tuple] = {}
+    for row in rows:
+        key = (row[0], row[2], row[5])  # route_id, trip_id, stop_sequence
+        seen[key] = row
+    deduped = list(seen.values())
+
     with conn.cursor() as cur:
         execute_values(
             cur,
@@ -410,8 +417,16 @@ def _flush_timetables(conn, rows: List[Tuple]) -> None:
                 days_of_week, valid_from, valid_until
             )
             VALUES %s
+            ON CONFLICT (route_id, trip_id, stop_sequence) DO UPDATE SET
+                stop_id = EXCLUDED.stop_id,
+                arrival_time = EXCLUDED.arrival_time,
+                departure_time = EXCLUDED.departure_time,
+                direction = EXCLUDED.direction,
+                days_of_week = EXCLUDED.days_of_week,
+                valid_from = EXCLUDED.valid_from,
+                valid_until = EXCLUDED.valid_until
             """,
-            rows,
+            deduped,
         )
     conn.commit()
 
