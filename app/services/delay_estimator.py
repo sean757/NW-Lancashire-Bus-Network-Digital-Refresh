@@ -40,6 +40,10 @@ logger = logging.getLogger(__name__)
 # Maximum distance (km) from the route line for a vehicle to be considered "on" it.
 _MAX_ROUTE_DISTANCE_KM = 0.5
 
+# Delay estimates above this threshold (minutes) are suppressed — they almost
+# always indicate a vehicle/trip mismatch rather than a genuine delay.
+_MAX_PLAUSIBLE_DELAY_MINS = 30
+
 # ---------------------------------------------------------------------------
 # Vehicle → trip_id mapping cache.
 #
@@ -415,6 +419,10 @@ def _propagate_route_delay(
 
     delay_secs = current_secs - sched_time
     delay_mins = round(delay_secs / 60)
+
+    if abs(delay_mins) > _MAX_PLAUSIBLE_DELAY_MINS:
+        return None
+
     status = "on_time" if abs(delay_mins) <= 1 else "delayed"
 
     return {
@@ -600,6 +608,9 @@ async def estimate_leg_delay(
 
     delay_secs = current_secs - sched_time
     delay_mins = round(delay_secs / 60)
+
+    if abs(delay_mins) > _MAX_PLAUSIBLE_DELAY_MINS:
+        return None
 
     status = "on_time" if abs(delay_mins) <= 1 else "delayed"
 
