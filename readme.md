@@ -10,12 +10,12 @@
 
 ### 0.5. If you are running this on a personal device:
 	
-  a. Consider how performant the device is, running this server can take a while to startup to using slow computers could make the startup procedure take well over 30 minutes
-	b. Ensure that docker is installed, to install docker desktop for windows please see: 
-		i. For windows please see: https://docs.docker.com/desktop/setup/install/windows-install/
-		ii. For Macs please see: https://docs.docker.com/desktop/setup/install/mac-install/
-		iii. For Linux please see: https://docs.docker.com/desktop/setup/install/linux/
-  c. Ensure you are on the University VPN details on how to do this can be found here: https://portal.lancaster.ac.uk/ask/digital/services/university-it-network/vpn/
+1. Consider how performant the device is, running this server can take a while to startup to using slow computers could make the startup procedure take well over 30 minutes
+2. Ensure that docker is installed, to install docker desktop for windows please see: 
+	i. For windows please see: https://docs.docker.com/desktop/setup/install/windows-install/
+	ii. For Macs please see: https://docs.docker.com/desktop/setup/install/mac-install/
+	iii. For Linux please see: https://docs.docker.com/desktop/setup/install/linux/
+3. Ensure you are on the University VPN details on how to do this can be found here: https://portal.lancaster.ac.uk/ask/digital/services/university-it-network/vpn/
 
 ### 1. Clone the repository
 
