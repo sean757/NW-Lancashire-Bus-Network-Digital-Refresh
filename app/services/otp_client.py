@@ -196,6 +196,10 @@ def _parse_legs(otp_legs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 "distance_km": round((otp_leg.get("distance") or 0) / 1000.0, 3),
                 "departure_time": _ms_to_time_str(dep_ms),
                 "arrival_time": _ms_to_time_str(arr_ms),
+                "from_lat": from_place.get("lat"),
+                "from_lon": from_place.get("lon"),
+                "to_lat": to_place.get("lat"),
+                "to_lon": to_place.get("lon"),
             }
             if waypoints:
                 walk_leg["waypoints"] = waypoints
@@ -274,8 +278,12 @@ def _parse_legs(otp_legs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 "direction": direction,
                 "origin_stop_id": origin_stop_id,
                 "origin_stop_name": from_place.get("name", ""),
+                "origin_lat": from_place.get("lat"),
+                "origin_lon": from_place.get("lon"),
                 "destination_stop_id": dest_stop_id,
                 "destination_stop_name": to_place.get("name", ""),
+                "destination_lat": to_place.get("lat"),
+                "destination_lon": to_place.get("lon"),
                 "departure_time": _ms_to_time_str(dep_ms),
                 "arrival_time": _ms_to_time_str(arr_ms),
             }

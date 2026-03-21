@@ -337,7 +337,9 @@ async def plan_journey(req: JourneyRequest, db: AsyncSession = Depends(get_db)):
                     waypoint_cache[cache_key] = await _fetch_leg_waypoints(
                         db, route_id, direction, from_stop, to_stop
                     )
-                leg["waypoints"] = waypoint_cache[cache_key]
+                db_wpts = waypoint_cache[cache_key]
+                if db_wpts:
+                    leg["waypoints"] = db_wpts
             elif mode == "rail":
                 route_id = leg.get("route_id") or ""
                 parts = route_id.split("_")

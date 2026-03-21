@@ -2348,6 +2348,17 @@ async function drawJourneyOnMap(journey) {
             coordCache[sid] = [parseFloat(stop.latitude), parseFloat(stop.longitude)];
             return coordCache[sid];
         }
+        // Fallback: use OTP-provided coordinates embedded in the leg
+        const isOrigin = key === 'origin_stop_id';
+        const latKey = isOrigin ? 'origin_lat' : 'destination_lat';
+        const lonKey = isOrigin ? 'origin_lon' : 'destination_lon';
+        if (leg[latKey] != null && leg[lonKey] != null) {
+            const coords = [parseFloat(leg[latKey]), parseFloat(leg[lonKey])];
+            if (!Number.isNaN(coords[0]) && !Number.isNaN(coords[1])) {
+                coordCache[sid] = coords;
+                return coords;
+            }
+        }
         return null;
     }
 
@@ -2370,23 +2381,33 @@ async function drawJourneyOnMap(journey) {
             } else {
                 // Fall back to OpenRouteService or a straight line between the
                 // previous bus leg's last stop and the next bus leg's first stop.
+                // If lastPoint is unknown (e.g. DB is empty), derive from the
+                // walk leg's own OTP-provided coordinates.
+                let walkFrom = lastPoint;
+                if (!walkFrom && leg.from_lat != null && leg.from_lon != null) {
+                    walkFrom = [parseFloat(leg.from_lat), parseFloat(leg.from_lon)];
+                }
                 let nextBusCoords = null;
                 for (let j = i + 1; j < legs.length; j++) {
                     if ((legs[j].mode || 'bus') === 'walk') continue;
                     nextBusCoords = await coordsForLegEndpoint(legs[j], 'origin_stop_id');
                     if (nextBusCoords) break;
                 }
-                if (lastPoint && nextBusCoords) {
+                // Also try the walk leg's own destination coordinates
+                if (!nextBusCoords && leg.to_lat != null && leg.to_lon != null) {
+                    nextBusCoords = [parseFloat(leg.to_lat), parseFloat(leg.to_lon)];
+                }
+                if (walkFrom && nextBusCoords) {
                     try {
-                        console.log(`Routing walking leg from ${lastPoint} to ${nextBusCoords}`);
-                        const routed = await routeAlongRoad(lastPoint, nextBusCoords, 'walking');
+                        console.log(`Routing walking leg from ${walkFrom} to ${nextBusCoords}`);
+                        const routed = await routeAlongRoad(walkFrom, nextBusCoords, 'walking');
                         if (routed && routed.length) {
                             walkPline = L.polyline(routed, walkStyle).addTo(routeLayerGroup);
                         } else {
-                            walkPline = L.polyline([lastPoint, nextBusCoords], walkStyle).addTo(routeLayerGroup);
+                            walkPline = L.polyline([walkFrom, nextBusCoords], walkStyle).addTo(routeLayerGroup);
                         }
                     } catch (err) {
-                        walkPline = L.polyline([lastPoint, nextBusCoords], walkStyle).addTo(routeLayerGroup);
+                        walkPline = L.polyline([walkFrom, nextBusCoords], walkStyle).addTo(routeLayerGroup);
                     }
                 }
             }
@@ -3119,7 +3140,7 @@ function renderJourneyList(journeys, departureDate) {
 
                 const legDestLabel = leg.destination_stop_name || leg.to_stop || leg.destination_stop_id || '';
                 const serviceDest = isRail
-                    ? (leg.rail_service_destination || finalTransitDest || legDestLabel)
+                    ? (leg.rail_service_destination || legDestLabel || finalTransitDest)
                     : legDestLabel;
                 const route = isRail
                     ? `${t.serviceTo} ${serviceDest}`.trim()
