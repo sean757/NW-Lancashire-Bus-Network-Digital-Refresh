@@ -73,6 +73,21 @@ CREATE TABLE IF NOT EXISTS timetables (
     valid_until     DATE
 );
 
+-- Ensure each stop in a trip has a unique sequence position.
+-- This prevents duplicate rows when multiple XML files or multi-section
+-- JourneyPatterns contribute stops for the same trip.
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'uq_timetables_trip_stop_seq'
+    ) THEN
+        ALTER TABLE timetables
+        ADD CONSTRAINT uq_timetables_trip_stop_seq
+        UNIQUE (route_id, trip_id, stop_sequence);
+    END IF;
+END$$;
+
 CREATE INDEX IF NOT EXISTS idx_timetables_route ON timetables(route_id);
 CREATE INDEX IF NOT EXISTS idx_timetables_stop ON timetables(stop_id);
 CREATE INDEX IF NOT EXISTS idx_timetables_trip ON timetables(trip_id);
@@ -98,6 +113,7 @@ CREATE TABLE IF NOT EXISTS live_positions (
 CREATE INDEX IF NOT EXISTS idx_live_positions_vehicle ON live_positions(vehicle_id);
 CREATE INDEX IF NOT EXISTS idx_live_positions_route ON live_positions(route_id);
 CREATE INDEX IF NOT EXISTS idx_live_positions_time ON live_positions(received_at);
+CREATE INDEX IF NOT EXISTS idx_live_positions_route_time ON live_positions(route_id, received_at DESC);
 
 -- Keep only recent positions (partition or cleanup via cron)
 -- Recommended: DELETE FROM live_positions WHERE received_at < NOW() - INTERVAL '24 hours'

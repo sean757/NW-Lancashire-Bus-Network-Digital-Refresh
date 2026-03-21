@@ -527,9 +527,9 @@ body {
 
 /* Route Display Panel */
 .route-display {
-    flex: 0 0 clamp(300px, 32vw, 440px);
-    width: clamp(300px, 32vw, 440px);
-    min-width: 300px;
+    flex: 0 0 clamp(375px, 40vw, 550px);
+    width: clamp(375px, 40vw, 550px);
+    min-width: 375px;
     height: calc(100vh - 140px);
     min-height: 400px;
     position: relative;
@@ -1070,9 +1070,9 @@ body.high-contrast .input-group input.map-input-picking {
     }
 
     .route-display {
-        flex-basis: 300px;
-        width: 300px;
-        min-width: 260px;
+        flex-basis: 375px;
+        width: 375px;
+        min-width: 325px;
     }
 
     .weather-widget {
@@ -1147,7 +1147,7 @@ body.high-contrast .input-group input.map-input-picking {
         width: 100%;
         min-width: 0;
         height: auto;
-        max-height: 38vh;
+        max-height: 47vh;
     }
 
     .map-area {
@@ -1838,6 +1838,86 @@ body.high-contrast .journey-departed-warning {
 
 .journey-leg-sep {
     color: var(--text-muted);
+}
+
+/* Live delay / on-time / schedule badges on transit legs */
+.journey-leg-delay-badge,
+.journey-leg-ontime-badge,
+.journey-leg-schedule-badge {
+    display: inline-block;
+    margin-left: 8px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 0.82em;
+    font-weight: 600;
+    vertical-align: middle;
+    white-space: nowrap;
+}
+
+.journey-leg-delay-badge {
+    background: #fff3cd;
+    color: #856404;
+    border: 1px solid #ffc107;
+}
+
+.journey-leg-ontime-badge {
+    background: #d4edda;
+    color: #155724;
+    border: 1px solid #28a745;
+}
+
+.journey-leg-schedule-badge {
+    background: var(--bg-secondary, #f0f0f0);
+    color: var(--text-muted, #666);
+    border: 1px solid var(--border-light, #ddd);
+}
+
+body.high-contrast .journey-leg-delay-badge {
+    background: #ff0;
+    color: #000;
+    border-color: #000;
+}
+
+body.high-contrast .journey-leg-ontime-badge {
+    background: #0f0;
+    color: #000;
+    border-color: #000;
+}
+
+body.high-contrast .journey-leg-schedule-badge {
+    background: #fff;
+    color: #000;
+    border-color: #000;
+}
+
+/* Rail platform badge */
+.journey-leg-platform-badge {
+    display: inline-block;
+    margin-left: 8px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 0.82em;
+    font-weight: 600;
+    vertical-align: middle;
+    white-space: nowrap;
+    background: #d6eaf8;
+    color: #1a5276;
+    border: 1px solid #5dade2;
+}
+
+body.high-contrast .journey-leg-platform-badge {
+    background: #cff;
+    color: #000;
+    border-color: #000;
+}
+
+/* Delay reason text (shown below badge) */
+.journey-leg-delay-reason {
+    display: block;
+    margin-top: 4px;
+    font-size: 0.8em;
+    color: #856404;
+    font-style: italic;
 }
 
 /* "View on map" button row at bottom of each card */

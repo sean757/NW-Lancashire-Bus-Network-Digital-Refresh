@@ -858,30 +858,12 @@ async function fetchStopsForBoundsWithFallback(bounds) {
         }
     }
 
-    // Deduplicate rail stops client-side (same logic as backend)
-    // to ensure only one station marker appears per CRS code
-    const railByCrs = {};
-    const output = [];
-
-    inBounds.forEach((stop) => {
-        if ((stop.stop_type || '').toLowerCase() === 'rail' && stop.crs_code) {
-            const crs = stop.crs_code.toUpperCase();
-            const existing = railByCrs[crs];
-            if (!existing) {
-                railByCrs[crs] = stop;
-            } else {
-                // Prefer the main station entry (9100 prefix) over entrances
-                const isPrimary = (s) => String(s.stop_id || '').startsWith('9100');
-                if (isPrimary(stop) && !isPrimary(existing)) {
-                    railByCrs[crs] = stop;
-                }
-            }
-        } else {
-            output.push(stop);
-        }
+    // Deduplicate rail stops client-side: only keep primary station nodes
+    // (9100 prefix).  Entrances (2590/9200 etc.) are filtered out.
+    const output = inBounds.filter((stop) => {
+        if ((stop.stop_type || '').toLowerCase() !== 'rail') return true;
+        return String(stop.stop_id || '').startsWith('9100');
     });
-
-    output.push(...Object.values(railByCrs));
     return output;
 }
 
@@ -2366,6 +2348,17 @@ async function drawJourneyOnMap(journey) {
             coordCache[sid] = [parseFloat(stop.latitude), parseFloat(stop.longitude)];
             return coordCache[sid];
         }
+        // Fallback: use OTP-provided coordinates embedded in the leg
+        const isOrigin = key === 'origin_stop_id';
+        const latKey = isOrigin ? 'origin_lat' : 'destination_lat';
+        const lonKey = isOrigin ? 'origin_lon' : 'destination_lon';
+        if (leg[latKey] != null && leg[lonKey] != null) {
+            const coords = [parseFloat(leg[latKey]), parseFloat(leg[lonKey])];
+            if (!Number.isNaN(coords[0]) && !Number.isNaN(coords[1])) {
+                coordCache[sid] = coords;
+                return coords;
+            }
+        }
         return null;
     }
 
@@ -2388,23 +2381,33 @@ async function drawJourneyOnMap(journey) {
             } else {
                 // Fall back to OpenRouteService or a straight line between the
                 // previous bus leg's last stop and the next bus leg's first stop.
+                // If lastPoint is unknown (e.g. DB is empty), derive from the
+                // walk leg's own OTP-provided coordinates.
+                let walkFrom = lastPoint;
+                if (!walkFrom && leg.from_lat != null && leg.from_lon != null) {
+                    walkFrom = [parseFloat(leg.from_lat), parseFloat(leg.from_lon)];
+                }
                 let nextBusCoords = null;
                 for (let j = i + 1; j < legs.length; j++) {
                     if ((legs[j].mode || 'bus') === 'walk') continue;
                     nextBusCoords = await coordsForLegEndpoint(legs[j], 'origin_stop_id');
                     if (nextBusCoords) break;
                 }
-                if (lastPoint && nextBusCoords) {
+                // Also try the walk leg's own destination coordinates
+                if (!nextBusCoords && leg.to_lat != null && leg.to_lon != null) {
+                    nextBusCoords = [parseFloat(leg.to_lat), parseFloat(leg.to_lon)];
+                }
+                if (walkFrom && nextBusCoords) {
                     try {
-                        console.log(`Routing walking leg from ${lastPoint} to ${nextBusCoords}`);
-                        const routed = await routeAlongRoad(lastPoint, nextBusCoords, 'walking');
+                        console.log(`Routing walking leg from ${walkFrom} to ${nextBusCoords}`);
+                        const routed = await routeAlongRoad(walkFrom, nextBusCoords, 'walking');
                         if (routed && routed.length) {
                             walkPline = L.polyline(routed, walkStyle).addTo(routeLayerGroup);
                         } else {
-                            walkPline = L.polyline([lastPoint, nextBusCoords], walkStyle).addTo(routeLayerGroup);
+                            walkPline = L.polyline([walkFrom, nextBusCoords], walkStyle).addTo(routeLayerGroup);
                         }
                     } catch (err) {
-                        walkPline = L.polyline([lastPoint, nextBusCoords], walkStyle).addTo(routeLayerGroup);
+                        walkPline = L.polyline([walkFrom, nextBusCoords], walkStyle).addTo(routeLayerGroup);
                     }
                 }
             }
@@ -2676,6 +2679,66 @@ function openLegDetailsModal(leg, modeLabel, operatorName, routeName) {
         timesSection.appendChild(timesLabel);
         timesSection.appendChild(timesValue);
         body.appendChild(timesSection);
+    }
+
+    // Live delay information section
+    if (leg.delay_source) {
+        const delaySection = document.createElement('div');
+        delaySection.className = 'leg-modal-section';
+        const delayLabel = document.createElement('strong');
+        delayLabel.textContent = 'Live Status:';
+        const delayValue = document.createElement('div');
+        const isLiveSource = leg.delay_source === 'live_position' || leg.delay_source === 'darwin' || leg.delay_source === 'route_estimate';
+        const isDarwin = leg.delay_source === 'darwin';
+        const isRouteEstimate = leg.delay_source === 'route_estimate';
+
+        if (leg.is_cancelled) {
+            let cancelHTML = `<span class="journey-leg-delay-badge">❌ Cancelled</span>`;
+            if (leg.cancel_reason) cancelHTML += `<div class="journey-leg-delay-reason">${leg.cancel_reason}</div>`;
+            delayValue.innerHTML = cancelHTML;
+        } else if (leg.estimated_delay_mins != null && leg.estimated_delay_mins > 1 && isLiveSource) {
+            const qualifier = isRouteEstimate ? '~' : '~';
+            let delayHTML = `<span class="journey-leg-delay-badge">⚠️ Estimated ${qualifier}${leg.estimated_delay_mins} min delay</span>`;
+            if (isRouteEstimate) delayHTML += ` <small>(based on nearby vehicle)</small>`;
+            if (leg.estimated_departure) delayHTML += `<div>Expected departure: <strong>${leg.estimated_departure}</strong></div>`;
+            if (leg.delay_reason) delayHTML += `<div class="journey-leg-delay-reason">${leg.delay_reason}</div>`;
+            delayValue.innerHTML = delayHTML;
+        } else if (isLiveSource && leg.estimated_delay_mins != null) {
+            const src = isDarwin ? 'National Rail live feed' : isRouteEstimate ? 'nearby vehicle on route' : 'live vehicle position';
+            delayValue.innerHTML = `<span class="journey-leg-ontime-badge">✅ On time</span> <small>(${src})</small>`;
+        } else {
+            delayValue.innerHTML = `<span class="journey-leg-schedule-badge">📅 Scheduled times (no live data available)</span>`;
+        }
+
+        delaySection.appendChild(delayLabel);
+        delaySection.appendChild(delayValue);
+        body.appendChild(delaySection);
+
+        // Rail-specific extra detail
+        if (isDarwin) {
+            const railDetail = document.createElement('div');
+            railDetail.className = 'leg-modal-section';
+            const railLabel = document.createElement('strong');
+            railLabel.textContent = 'Rail Service Detail:';
+            let detailHTML = '';
+            if (leg.platform) detailHTML += `<div>🚏 Platform <strong>${leg.platform}</strong></div>`;
+            if (leg.operator) detailHTML += `<div>Operator: ${leg.operator}</div>`;
+            if (leg.service_id) detailHTML += `<div>Service ID: <code>${leg.service_id}</code></div>`;
+            if (leg.destination_delay_mins != null) {
+                const destStatus = leg.destination_delay_mins === 0
+                    ? '✅ On time at destination'
+                    : `⚠️ ~${leg.destination_delay_mins} min delay at destination`;
+                detailHTML += `<div>${destStatus}</div>`;
+                if (leg.destination_estimated_time) detailHTML += `<div>Estimated arrival: <strong>${leg.destination_estimated_time}</strong></div>`;
+            }
+            if (detailHTML) {
+                const railValue = document.createElement('div');
+                railValue.innerHTML = detailHTML;
+                railDetail.appendChild(railLabel);
+                railDetail.appendChild(railValue);
+                body.appendChild(railDetail);
+            }
+        }
     }
 
     // Additional info message
@@ -3077,7 +3140,7 @@ function renderJourneyList(journeys, departureDate) {
 
                 const legDestLabel = leg.destination_stop_name || leg.to_stop || leg.destination_stop_id || '';
                 const serviceDest = isRail
-                    ? (leg.rail_service_destination || finalTransitDest || legDestLabel)
+                    ? (leg.rail_service_destination || legDestLabel || finalTransitDest)
                     : legDestLabel;
                 const route = isRail
                     ? `${t.serviceTo} ${serviceDest}`.trim()
@@ -3138,6 +3201,56 @@ function renderJourneyList(journeys, departureDate) {
                     arrSpan.className = 'journey-leg-arrive';
                     arrSpan.textContent = leg.arrival_time;
                     timesDiv.appendChild(arrSpan);
+                }
+
+                // Live delay badge
+                const isLiveSource = leg.delay_source === 'live_position' || leg.delay_source === 'darwin' || leg.delay_source === 'route_estimate';
+                const isDarwin = leg.delay_source === 'darwin';
+                const isRouteEstimate = leg.delay_source === 'route_estimate';
+
+                if (leg.is_cancelled) {
+                    const cancelBadge = document.createElement('span');
+                    cancelBadge.className = 'journey-leg-delay-badge';
+                    cancelBadge.textContent = '❌ Cancelled';
+                    cancelBadge.title = leg.cancel_reason || 'This service has been cancelled';
+                    timesDiv.appendChild(cancelBadge);
+                } else if (leg.estimated_delay_mins != null && leg.estimated_delay_mins > 1 && isLiveSource) {
+                    const delayBadge = document.createElement('span');
+                    delayBadge.className = 'journey-leg-delay-badge';
+                    const src = isDarwin ? 'Darwin live feed' : isRouteEstimate ? 'nearby vehicle on route' : 'live vehicle position data';
+                    delayBadge.textContent = `⚠️ ~${leg.estimated_delay_mins} min delay`;
+                    delayBadge.title = `Estimated from ${src}`;
+                    timesDiv.appendChild(delayBadge);
+                    if (leg.delay_reason) {
+                        const reasonEl = document.createElement('span');
+                        reasonEl.className = 'journey-leg-delay-reason';
+                        reasonEl.textContent = leg.delay_reason;
+                        timesDiv.appendChild(reasonEl);
+                    }
+                } else if (isLiveSource && leg.estimated_delay_mins != null) {
+                    const onTimeBadge = document.createElement('span');
+                    onTimeBadge.className = 'journey-leg-ontime-badge';
+                    onTimeBadge.textContent = '✅ On time';
+                    onTimeBadge.title = isDarwin
+                        ? 'Confirmed on time by National Rail'
+                        : isRouteEstimate
+                            ? 'Based on nearby vehicle currently on this route'
+                            : 'Vehicle is on schedule based on live position';
+                    timesDiv.appendChild(onTimeBadge);
+                } else if (leg.delay_source === 'schedule') {
+                    const schedBadge = document.createElement('span');
+                    schedBadge.className = 'journey-leg-schedule-badge';
+                    schedBadge.textContent = '📅 Scheduled';
+                    schedBadge.title = 'No live data available — times are from the timetable';
+                    timesDiv.appendChild(schedBadge);
+                }
+
+                // Rail-specific: show platform number
+                if (isDarwin && leg.platform) {
+                    const platBadge = document.createElement('span');
+                    platBadge.className = 'journey-leg-platform-badge';
+                    platBadge.textContent = `Platform ${leg.platform}`;
+                    timesDiv.appendChild(platBadge);
                 }
 
                 li.appendChild(timesDiv);

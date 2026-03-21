@@ -225,11 +225,23 @@ def load_crs_stops_from_naptan(conn) -> Dict[str, Tuple[str, float, float]]:
 # ---------------------------------------------------------------------------
 
 def clear_existing_rail_data(conn) -> None:
+    log.info("Clearing existing rail data from database...")
     with conn.cursor() as cur:
-        cur.execute(
-            "DELETE FROM timetables WHERE route_id IN (SELECT route_id FROM routes WHERE route_type = 'rail')")
-        cur.execute("DELETE FROM routes WHERE route_type = 'rail'")
+        cur.execute("SET lock_timeout = '30s'")
+        try:
+            cur.execute(
+                "DELETE FROM timetables WHERE route_id IN (SELECT route_id FROM routes WHERE route_type = 'rail')")
+            cur.execute("DELETE FROM routes WHERE route_type = 'rail'")
+        except psycopg2.errors.LockNotAvailable:
+            conn.rollback()
+            raise RuntimeError(
+                "Could not acquire lock on timetables/routes tables within 30s. "
+                "Another process may be holding a transaction open "
+                "(e.g. a stopped ingest_timetables.py). "
+                "Check pg_stat_activity for 'idle in transaction' sessions."
+            )
     conn.commit()
+    log.info("Existing rail data cleared.")
 
 
 def ingest_schedule(
@@ -387,6 +399,13 @@ def _flush_routes(conn, route_rows: Iterable[Dict[str, str]]) -> None:
 
 
 def _flush_timetables(conn, rows: List[Tuple]) -> None:
+    # Deduplicate within the batch: keep last row per (route_id, trip_id, stop_sequence)
+    seen: Dict[Tuple, Tuple] = {}
+    for row in rows:
+        key = (row[0], row[2], row[5])  # route_id, trip_id, stop_sequence
+        seen[key] = row
+    deduped = list(seen.values())
+
     with conn.cursor() as cur:
         execute_values(
             cur,
@@ -398,8 +417,16 @@ def _flush_timetables(conn, rows: List[Tuple]) -> None:
                 days_of_week, valid_from, valid_until
             )
             VALUES %s
+            ON CONFLICT (route_id, trip_id, stop_sequence) DO UPDATE SET
+                stop_id = EXCLUDED.stop_id,
+                arrival_time = EXCLUDED.arrival_time,
+                departure_time = EXCLUDED.departure_time,
+                direction = EXCLUDED.direction,
+                days_of_week = EXCLUDED.days_of_week,
+                valid_from = EXCLUDED.valid_from,
+                valid_until = EXCLUDED.valid_until
             """,
-            rows,
+            deduped,
         )
     conn.commit()
 

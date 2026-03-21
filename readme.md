@@ -8,6 +8,15 @@
 
 ## Setup Steps
 
+### 0.5. If you are running this on a personal device:
+	
+  a. Consider how performant the device is, running this server can take a while to startup to using slow computers could make the startup procedure take well over 30 minutes
+	b. Ensure that docker is installed, to install docker desktop for windows please see: 
+		i. For windows please see: https://docs.docker.com/desktop/setup/install/windows-install/
+		ii. For Macs please see: https://docs.docker.com/desktop/setup/install/mac-install/
+		iii. For Linux please see: https://docs.docker.com/desktop/setup/install/linux/
+  c. Ensure you are on the University VPN details on how to do this can be found here: https://portal.lancaster.ac.uk/ask/digital/services/university-it-network/vpn/
+
 ### 1. Clone the repository
 
 ```bash
@@ -22,23 +31,13 @@ Run this on the **host machine** (outside of the devcontainer):
 **If using Podman (lab machines):**
 
 ```bash
-podman run -d --name scc200-db \
-  -e POSTGRES_USER=transport \
-  -e POSTGRES_PASSWORD=transport_dev \
-  -e POSTGRES_DB=transport_db \
-  -p 5432:5432 \
-  docker.io/library/postgres:16
+podman run -d --name scc200-db -e POSTGRES_USER=transport -e POSTGRES_PASSWORD=transport_dev -e POSTGRES_DB=transport_db -p 5432:5432 docker.io/library/postgres:16
 ```
 
 **If using Docker (personal machines):**
 
 ```bash
-docker run -d --name scc200-db \
-  -e POSTGRES_USER=transport \
-  -e POSTGRES_PASSWORD=transport_dev \
-  -e POSTGRES_DB=transport_db \
-  -p 5432:5432 \
-  postgres:16
+docker run -d --name scc200-db -e POSTGRES_USER=transport -e POSTGRES_PASSWORD=transport_dev -e POSTGRES_DB=transport_db -p 5432:5432 postgres:16
 ```
 
 ### 3. Open the project in the devcontainer
@@ -47,6 +46,12 @@ docker run -d --name scc200-db \
 2. Press `Ctrl+Shift+P` (or `Cmd+Shift+P` on Mac)
 3. Type `Dev Containers: Reopen in Container` and select it
 4. Wait for the container to build (first time takes a few minutes)
+5. If this fails and you are on a PERSONAL DEVICE please follow the following steps:
+  1. Open Docker Desktop
+  2. On the list of options on the sidebar on the left hand side go to containers
+  3. Delete all containers listed except for the one called SCC200-DB
+  4. Rebuild the devcontainer in VS code
+  5. If this also fails please contact max with screenshots of the issue
 
 All Python dependencies are installed automatically.
 
@@ -66,6 +71,13 @@ PGPASSWORD=transport_dev psql -h localhost -U transport -d transport_db -f scrip
 python -u scripts/ingest_stops.py
 ```
 
+#### 5.1 If this step fails:
+1. Ensure you are on the University VPN, please see 0.5c
+2. Ensure you have setup the database container, please see step 2
+3. If both of these fail the application should still be runnable but the following issues may crop up:
+  a. Users won't be able to see stops on the map
+  b. Users won't be able to search for stops in the relevant search bars, users will need to click on the map to enter from/to locations
+
 This downloads NaPTAN data and imports ~382,000 bus stops. Takes about 30 seconds.
 
 ### 6. Load timetable data
@@ -73,6 +85,11 @@ This downloads NaPTAN data and imports ~382,000 bus stops. Takes about 30 second
 ```bash
 python -u scripts/ingest_timetables.py
 ```
+#### 6.1 If this step fails:
+1. Ensure you are on the University VPN, please see 0.5c
+2. Ensure you have setup the database container, please see step 2
+3. If both of these fail the application should still be runnable but the following issues may crop up:
+  a. Exact bus routes will not be drawn on the map
 
 Downloads TransXChange timetable ZIPs for all configured operators and inserts
 routes, stop sequences, and trip times into the database.  Data is sanitised
@@ -84,6 +101,11 @@ warnings).
 ```bash
 python -u scripts/ingest_rail.py
 ```
+#### 7.1 If this step fails:
+1. Ensure you are on the University VPN, please see 0.5c
+2. Ensure you have setup the database container, please see step 2
+3. If both of these fail the application should still be runnable but the following issues may crop up:
+  a. Rail stops will not be visible on the map nor inputtable in the relevant search bars, users will need to click on the map to enter from/to locations
 
 Ingests National Rail schedules for regional rail routing and inserts rail routes
 and stop times into the database.
@@ -109,19 +131,21 @@ OTP is a Java application.  Download the latest OTP 2.x JAR from the
 [OTP releases page](https://github.com/opentripplanner/OpenTripPlanner/releases)
 and place the GTFS ZIP and an OpenStreetMap extract in the same directory.
 
+#### 9.1 If you have managed to download ALL data (injest_stops, injest_timetables and injest_rail have all succeeded):
+
 ```bash
-# Download OTP (replace X.Y.Z with the latest version)
+# Download OTP (replace 2.8.1 with the latest version)
 wget https://github.com/opentripplanner/OpenTripPlanner/releases/download/v2.8.1/otp-shaded-2.8.1.jar
 
 # Download an OSM extract for NW Lancashire/Lancashire
 # (e.g. from https://download.geofabrik.de/europe/great-britain/england/lancashire.html)
 wget https://download.geofabrik.de/europe/united-kingdom/england/lancashire-latest.osm.pbf
+```
+# Move relevant files into otp-data
+Move gtfs_export.zip into otp-data
+Move lancashire-latest.osm.pbf into otp-data
 
-# Create OTP data directory
-mkdir -p otp-data
-cp gtfs_export.zip otp-data/
-cp lancashire-latest.osm.pbf otp-data/
-
+```bash
 # Build the OTP graph (takes a few minutes)
 java -Xmx4G -jar otp-shaded-2.8.1.jar --build --save otp-data
 
@@ -132,16 +156,22 @@ java -Xmx4G -jar otp-shaded-2.8.1.jar --build --save otp-data
 java -Xmx4G -jar otp-shaded-2.8.1.jar --load otp-data --port 9090
 ```
 
-Set the OTP URL before starting the API server:
+#### 9.2 If you have NOT managed to download ALL data (at least one of injest_stops, injest_timetables and injest_rail have not succeeded)
+
+You can still run the application with some of these missing as was described in the import script steps, there should be a backup version of the graph.obj file in otp-data that OTP can use. Please follow these steps:
+
+```bash
+# Start OTP server (default port 8080)
+# IMPORTANT: OTP uses port 8080 by default — the API backend uses the same
+# port in development.  Run OTP on a different port (e.g. 9090) and update
+# the OTP_URL environment variable accordingly.
+java -Xmx4G -jar otp-shaded-2.8.1.jar --load otp-data --port 9090
+```
+
+Now open a new terminal in VS code and set the OTP URL before starting the API server:
 
 ```bash
 export OTP_URL=http://localhost:9090
-```
-
-Or add it to a `.env` file in the project root:
-
-```ini
-OTP_URL=http://localhost:9090
 ```
 
 ### 10. Start the API server
@@ -150,11 +180,13 @@ OTP_URL=http://localhost:9090
 uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload
 ```
 
+Please note when starting the server the cache will be loaded by the server which can take 1-2 minutes depending on the size of the cache.
+
 API docs available at: http://localhost:8080/docs
 
 ### 11. Verify front-end works
 
-Open `http://localhost:3000` in your browser to view the front-end webpage
+Open `http://localhost:8080` in your browser to view the front-end webpage
 
 ### 12. Verify everything works
 
