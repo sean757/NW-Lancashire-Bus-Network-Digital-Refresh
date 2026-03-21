@@ -141,7 +141,7 @@ wget https://github.com/opentripplanner/OpenTripPlanner/releases/download/v2.8.1
 # (e.g. from https://download.geofabrik.de/europe/great-britain/england/lancashire.html)
 wget https://download.geofabrik.de/europe/united-kingdom/england/lancashire-latest.osm.pbf
 ```
-# Move relevant files into otp-data
+#### Move relevant files into otp-data
 Move gtfs_export.zip into otp-data
 Move lancashire-latest.osm.pbf into otp-data
 
