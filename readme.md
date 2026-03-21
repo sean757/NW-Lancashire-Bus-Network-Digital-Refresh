@@ -142,8 +142,7 @@ wget https://github.com/opentripplanner/OpenTripPlanner/releases/download/v2.8.1
 wget https://download.geofabrik.de/europe/united-kingdom/england/lancashire-latest.osm.pbf
 ```
 #### Move relevant files into otp-data
-Move gtfs_export.zip into otp-data
-Move lancashire-latest.osm.pbf into otp-data
+Move gtfs_export.zip into otp-data and move lancashire-latest.osm.pbf into otp-data
 
 ```bash
 # Build the OTP graph (takes a few minutes)
