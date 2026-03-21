@@ -168,7 +168,7 @@ You can still run the application with some of these missing as was described in
 java -Xmx4G -jar otp-shaded-2.8.1.jar --load otp-data --port 9090
 ```
 
-Now open a new terminal in VS code and set the OTP URL before starting the API server:
+**** IMPORTANT Now open a new terminal in VS code and set the OTP URL before starting the API server: IMPORTAT ****
 
 ```bash
 export OTP_URL=http://localhost:9090
