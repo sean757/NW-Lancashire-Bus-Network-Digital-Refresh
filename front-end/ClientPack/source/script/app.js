@@ -669,17 +669,107 @@ document.addEventListener('DOMContentLoaded', () => {
     initializeLeafletMap();
     initializePlannerToggle();
 
-    // Set datetime-local input constraint: max = now + 7 days
-    const dtInput = document.getElementById('departureTime');
-    if (dtInput) {
-        const maxDate = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-        // Format as YYYY-MM-DDTHH:MM (datetime-local format)
-        const pad = n => String(n).padStart(2, '0');
-        const toLocalDTString = d =>
-            `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-        dtInput.max = toLocalDTString(maxDate);
+    populateDepartureDateTimeControls();
+
+    const timeTypeEl = document.getElementById('timeType');
+    if (timeTypeEl) {
+        timeTypeEl.addEventListener('change', updateDateTimeVisibilityByTimeType);
     }
+    updateDateTimeVisibilityByTimeType();
 });
+
+function updateDateTimeVisibilityByTimeType() {
+    const timeTypeEl = document.getElementById('timeType');
+    const dateGroup = document.getElementById('departureDateGroup');
+    const timeGroup = document.getElementById('departureTimeGroup');
+    if (!timeTypeEl || !dateGroup || !timeGroup) return;
+
+    const showDateTime = timeTypeEl.value !== 'now';
+    dateGroup.style.display = showDateTime ? '' : 'none';
+    timeGroup.style.display = showDateTime ? '' : 'none';
+
+    if (!showDateTime) {
+        const current = getCurrentDepartureSelection();
+        const dateSelect = document.getElementById('departureDate');
+        const timeSelect = document.getElementById('departureTime');
+        if (dateSelect && current.date) dateSelect.value = current.date;
+        if (timeSelect && current.time) timeSelect.value = current.time;
+    }
+}
+
+function getCurrentDepartureSelection() {
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    const roundedMins = Math.ceil(now.getMinutes() / 15) * 15;
+    let dateObj = new Date(now.getFullYear(), now.getMonth(), now.getDate(), now.getHours(), now.getMinutes(), 0, 0);
+    let hours = now.getHours();
+    let mins = roundedMins;
+    if (roundedMins >= 60) {
+        dateObj = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 0, 0);
+        hours = 0;
+        mins = 0;
+    }
+    return {
+        date: `${dateObj.getFullYear()}-${pad(dateObj.getMonth() + 1)}-${pad(dateObj.getDate())}`,
+        time: `${pad(hours)}:${pad(mins)}`,
+    };
+}
+
+function getExactCurrentDepartureSelection() {
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    return {
+        date: `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`,
+        time: `${pad(now.getHours())}:${pad(now.getMinutes())}`,
+    };
+}
+
+function populateDepartureDateTimeControls() {
+    const dateSelect = document.getElementById('departureDate');
+    const timeSelect = document.getElementById('departureTime');
+    if (!dateSelect || !timeSelect) return;
+
+    const prevDate = dateSelect.value;
+    const prevTime = timeSelect.value;
+    const pad = (n) => String(n).padStart(2, '0');
+    const locale = currentLang === 'zh' ? 'zh-CN' : 'en-GB';
+    const current = getCurrentDepartureSelection();
+    const now = new Date();
+
+    // Date dropdown: today -> +7 days
+    dateSelect.innerHTML = '';
+    for (let i = 0; i <= 7; i++) {
+        const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + i);
+        const value = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+        const labelCore = d.toLocaleDateString(locale, { weekday: 'short', day: '2-digit', month: 'short' });
+        const prefix = i === 0
+            ? (currentLang === 'zh' ? '今天' : 'Today')
+            : (i === 1 ? (currentLang === 'zh' ? '明天' : 'Tomorrow') : '');
+        const option = document.createElement('option');
+        option.value = value;
+        option.textContent = prefix ? `${prefix} · ${labelCore}` : labelCore;
+        dateSelect.appendChild(option);
+    }
+    dateSelect.value = prevDate || current.date || dateSelect.options[0]?.value || '';
+
+    // Time dropdown: 15-min intervals
+    timeSelect.innerHTML = '';
+    for (let h = 0; h < 24; h++) {
+        for (let m = 0; m < 60; m += 15) {
+            const t = `${pad(h)}:${pad(m)}`;
+            const option = document.createElement('option');
+            option.value = t;
+            option.textContent = t;
+            timeSelect.appendChild(option);
+        }
+    }
+
+    if (prevTime) {
+        timeSelect.value = prevTime;
+    } else {
+        timeSelect.value = current.time;
+    }
+}
 
 
 function initializeLeafletMap() {
@@ -1392,7 +1482,10 @@ const translations = {
         serviceTo: 'Service to',
         viewOnMap: '🗺️ View on Map',
         dateTime: 'Date & Time:',
+        dateLabel: 'Date:',
+        timeLabel: 'Time:',
         timeTypeLabel: 'Time Type:',
+        now: 'Now',
         departAfter: 'Depart After',
         arriveBefore: 'Arrive Before',
         noJourneys: 'No journeys found for the selected points.',
@@ -1460,7 +1553,10 @@ const translations = {
         serviceTo: '开往',
         viewOnMap: '🗺️ 在地图上查看',
         dateTime: '日期和时间：',
+        dateLabel: '日期：',
+        timeLabel: '时间：',
         timeTypeLabel: '时间类型：',
+        now: '现在',
         departAfter: '出发时间不早于',
         arriveBefore: '到达时间不晚于',
         noJourneys: '未找到符合所选起点和终点的路线。',
@@ -1502,8 +1598,13 @@ function applyTranslations(lang) {
     document.querySelector('label[for="pathfinding"]').textContent = t.pathfinding;
     document.querySelector('#pathfinding option[value="fastest"]').textContent = t.fastest;
     document.querySelector('#pathfinding option[value="least-changes"]').textContent = t.leastChanges;
-    document.querySelector('label[for="departureTime"]').textContent = t.dateTime;
+    const dateLabelEl = document.querySelector('label[for="departureDate"]');
+    if (dateLabelEl) dateLabelEl.textContent = t.dateLabel || t.dateTime;
+    const timeLabelEl = document.querySelector('label[for="departureTime"]');
+    if (timeLabelEl) timeLabelEl.textContent = t.timeLabel || 'Time:';
     document.querySelector('label[for="timeType"]').textContent = t.timeTypeLabel;
+    const nowOption = document.querySelector('#timeType option[value="now"]');
+    if (nowOption) nowOption.textContent = t.now || 'Now';
     document.querySelector('#timeType option[value="depart-after"]').textContent = t.departAfter;
     document.querySelector('#timeType option[value="arrive-before"]').textContent = t.arriveBefore;
     document.querySelector('label[for="walkingSpeed"]').textContent = t.walkingSpeed;
@@ -1555,6 +1656,8 @@ function applyTranslations(lang) {
     if (settingsSaveBtn) settingsSaveBtn.textContent = t.settingsSave;
 
     currentLang = lang;
+    populateDepartureDateTimeControls();
+    updateDateTimeVisibilityByTimeType();
 }
 
 languageLink.addEventListener('click', (e) => {
@@ -3309,7 +3412,8 @@ planRouteBtn.addEventListener('click', async () => {
     const t = translations[currentLang] || translations.en;
     const pathfinding = document.getElementById('pathfinding').value;
     const walkingSpeed = document.getElementById('walkingSpeed').value;
-    const departureTimeInput = document.getElementById('departureTime').value;
+    const departureDateInput = (document.getElementById('departureDate') || {}).value || '';
+    const departureTimeInput = (document.getElementById('departureTime') || {}).value || '';
     const timeType = document.getElementById('timeType').value;
 
     // Ensure typed inputs are resolved to stops if possible
@@ -3360,14 +3464,14 @@ planRouteBtn.addEventListener('click', async () => {
 
     // Build common request parameters
     const commonParams = { preference: pathfinding, walking_speed: walkingSpeed, arrive_by: (timeType === 'arrive-before') };
-    if (departureTimeInput) {
-        const tIdx = departureTimeInput.indexOf('T');
-        if (tIdx !== -1) {
-            commonParams.departure_date = departureTimeInput.slice(0, tIdx);
-            commonParams.departure_time = departureTimeInput.slice(tIdx + 1);
-        } else {
-            commonParams.departure_time = departureTimeInput;
-        }
+    if (timeType === 'now') {
+        const current = getExactCurrentDepartureSelection();
+        commonParams.departure_date = current.date;
+        commonParams.departure_time = current.time;
+        commonParams.arrive_by = false;
+    } else {
+        if (departureDateInput) commonParams.departure_date = departureDateInput;
+        if (departureTimeInput) commonParams.departure_time = departureTimeInput;
     }
 
     routeContent.innerHTML = `<p>${t.planningRoute}</p>`;

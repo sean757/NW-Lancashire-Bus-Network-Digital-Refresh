@@ -46,7 +46,7 @@
             </button>
 
             <div class="planner-content" id="plannerContent">
-                <div class="planner-row">
+                <div class="planner-row planner-row-controls">
                     <div class="input-group">
                         <label for="startPoint">Start Point:</label>
                         <div class="location-input-wrapper">
@@ -77,14 +77,20 @@
                     <div class="input-group">
                         <label for="timeType">Time Type:</label>
                         <select id="timeType">
+                            <option value="now" selected>Now</option>
                             <option value="depart-after">Depart After</option>
                             <option value="arrive-before">Arrive Before</option>
                         </select>
                     </div>
 
-                    <div class="input-group">
-                        <label for="departureTime">Date &amp; Time:</label>
-                        <input type="datetime-local" id="departureTime">
+                    <div class="input-group datetime-compact" id="departureDateGroup">
+                        <label for="departureDate">Date:</label>
+                        <select id="departureDate"></select>
+                    </div>
+
+                    <div class="input-group datetime-compact" id="departureTimeGroup">
+                        <label for="departureTime">Time:</label>
+                        <select id="departureTime"></select>
                     </div>
 
                     <div class="input-group">

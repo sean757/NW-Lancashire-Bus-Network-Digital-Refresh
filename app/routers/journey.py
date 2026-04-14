@@ -5,19 +5,21 @@ OTP must be running and loaded with GTFS data exported by scripts/export_gtfs.py
 Configure the OTP URL with the OTP_URL environment variable (default: http://localhost:8080).
 """
 
-from app.services.delay_estimator import estimate_leg_delay, estimate_rail_leg_delay
-from app.services.route_cache import route_cache
-from app.services import otp_client
-from app.database import get_db
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import text
-from pydantic import BaseModel
-from fastapi import APIRouter, Depends, HTTPException
-import httpx
 import logging
 from datetime import date, datetime
 from typing import Optional
 from zoneinfo import ZoneInfo
+
+import httpx
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.database import get_db
+from app.services import otp_client
+from app.services.route_cache import route_cache
+from app.services.delay_estimator import estimate_leg_delay, estimate_rail_leg_delay
 
 _UK_TZ = ZoneInfo("Europe/London")
 
@@ -254,6 +256,23 @@ def _parse_departure_time_date(req: JourneyRequest):
     return dep_time, dep_date
 
 
+def _time_str_to_minutes(value: Optional[str]) -> Optional[int]:
+    """Convert HH:MM or HH:MM:SS to minutes since midnight."""
+    if not value:
+        return None
+    parts = value.strip().split(":")
+    if len(parts) < 2:
+        return None
+    try:
+        hh = int(parts[0])
+        mm = int(parts[1])
+    except ValueError:
+        return None
+    if hh < 0 or hh > 47 or mm < 0 or mm > 59:
+        return None
+    return hh * 60 + mm
+
+
 # ---------------------------------------------------------------------------
 # Endpoint
 # ---------------------------------------------------------------------------
@@ -320,6 +339,27 @@ async def plan_journey(req: JourneyRequest, db: AsyncSession = Depends(get_db)):
             status_code=502,
             detail=f"Journey planning service returned an error: HTTP {exc.response.status_code}.",
         )
+
+    # Enforce depart-after semantics. In rare cases OTP may include an
+    # itinerary that starts slightly earlier than requested.
+    if not (req.arrive_by or False):
+        requested_mins = dep_time.hour * 60 + dep_time.minute
+        filtered_journeys = []
+        for journey in journeys:
+            legs = journey.get("legs") or []
+            if not legs:
+                continue
+            first_dep = (legs[0] or {}).get("departure_time")
+            first_dep_mins = _time_str_to_minutes(first_dep)
+            if first_dep_mins is None:
+                filtered_journeys.append(journey)
+                continue
+
+            # Keep normal same-day departures and plausible overnight wraps.
+            if first_dep_mins >= requested_mins or (requested_mins - first_dep_mins) >= 12 * 60:
+                filtered_journeys.append(journey)
+
+        journeys = filtered_journeys
 
     # Enrich legs:
     # - Bus legs get DB-backed waypoints for map drawing.
