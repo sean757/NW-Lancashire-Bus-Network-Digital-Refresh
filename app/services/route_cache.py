@@ -47,6 +47,9 @@ class RouteCache:
     async def load(self):
         """Load all route, stop, and timetable data into memory."""
         async with async_session() as db:
+            # Set a statement timeout so a stuck lock can't block indefinitely.
+            await db.execute(text("SET statement_timeout = '120s'"))
+
             # Load routes
             result = await db.execute(text(
                 "SELECT route_id, route_name, operator, route_type FROM routes WHERE active = TRUE"
@@ -284,7 +287,8 @@ class RouteCache:
             neighbours = []
             for dlat in range(-1, 2):
                 for dlon in range(-1, 2):
-                    neighbours.extend(grid.get((cell_lat + dlat, cell_lon + dlon), []))
+                    neighbours.extend(
+                        grid.get((cell_lat + dlat, cell_lon + dlon), []))
 
             foot_paths[stop_id] = []
             for other_id in neighbours:
@@ -431,7 +435,8 @@ class RouteCache:
                             "alight_stop": stop_id,
                             "alight_secs": arr_secs,
                         }
-                        heapq.heappush(pq, (arr_secs, num_legs + 1, stop_id, legs + [new_leg]))
+                        heapq.heappush(
+                            pq, (arr_secs, num_legs + 1, stop_id, legs + [new_leg]))
 
             # ---- Walking transfers (free, don't consume a transfer slot) ----
             for other_stop, walk_secs in self.foot_paths.get(curr_stop, []):
@@ -445,7 +450,8 @@ class RouteCache:
                         "to_stop": other_stop,
                         "walk_secs": walk_secs,
                     }
-                    heapq.heappush(pq, (walk_arr, num_legs, other_stop, legs + [new_walk_leg]))
+                    heapq.heappush(
+                        pq, (walk_arr, num_legs, other_stop, legs + [new_walk_leg]))
 
         return results
 

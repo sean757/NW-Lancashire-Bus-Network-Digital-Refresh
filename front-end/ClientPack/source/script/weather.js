@@ -60,7 +60,7 @@ function initWeather() {
 async function fetchWeatherForCoords(lat, lon) {
     try {
         // Call local proxy to avoid browser CORS restrictions
-        const url = `http://localhost:8080/api/v1/weather?lat=${lat}&lon=${lon}`;
+        const url = `https://naoma-veinal-adelina.ngrok-free.dev/api/v1/weather?lat=${lat}&lon=${lon}`;
 
         const response = await fetch(url);
 
@@ -86,7 +86,7 @@ async function fetchWeatherForCoords(lat, lon) {
  */
 async function fetchWeatherData(lat, lon) {
     try {
-        const url = `http://localhost:8080/api/v1/weather?lat=${lat}&lon=${lon}`;
+        const url = `https://naoma-veinal-adelina.ngrok-free.dev/api/v1/weather?lat=${lat}&lon=${lon}`;
         const response = await fetch(url);
         if (!response.ok) return null;
         return await response.json();

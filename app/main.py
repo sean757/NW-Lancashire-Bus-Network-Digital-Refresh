@@ -52,15 +52,24 @@ async def startup():
     # Load route cache in the background so the server can start accepting
     # requests immediately.  The /health endpoint exposes cache_loaded status.
     asyncio.create_task(_load_cache_then_start())
+    # Start the vehicle cache independently so a slow/stuck DB query in the
+    # route cache doesn't block live bus position polling.
+    asyncio.create_task(_start_vehicle_cache())
+
+
+async def _start_vehicle_cache():
+    """Perform an initial vehicle cache fetch then start background refresh."""
+    try:
+        await vehicle_cache.refresh()
+    except Exception as exc:
+        log.error("Initial vehicle cache refresh failed: %s", exc)
+    asyncio.create_task(vehicle_cache.refresh_loop())
 
 
 async def _load_cache_then_start():
-    """Load route cache, then start all background refresh loops."""
+    """Load route cache, then start remaining background loops."""
     await route_cache.load()
     asyncio.create_task(route_cache.refresh_loop())
-    # Perform an initial vehicle cache fetch then start background refresh (every 30 s).
-    await vehicle_cache.refresh()
-    asyncio.create_task(vehicle_cache.refresh_loop())
     # Start the TRUST STOMP listener for live rail movement data.
     trust_listener.start()
     # Start the 24-hour data ingestion loop.
