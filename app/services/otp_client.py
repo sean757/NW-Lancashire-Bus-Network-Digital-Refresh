@@ -106,11 +106,13 @@ def _strip_feed_prefix(otp_id: Optional[str]) -> str:
 
 
 def _ms_to_time_str(epoch_ms: Optional[int]) -> str:
-    """Convert epoch-milliseconds to a local-time HH:MM:SS string."""
+    """Convert epoch-milliseconds to a UK-local-time HH:MM:SS string."""
     if not epoch_ms:
         return ""
     from datetime import datetime
-    dt = datetime.fromtimestamp(epoch_ms / 1000.0)
+    from zoneinfo import ZoneInfo
+    dt = datetime.fromtimestamp(
+        epoch_ms / 1000.0, tz=ZoneInfo("Europe/London"))
     return dt.strftime("%H:%M:%S")
 
 
