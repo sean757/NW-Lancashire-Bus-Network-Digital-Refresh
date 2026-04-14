@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+asyncpg
+sqlalchemy[asyncio]
+pydantic-settings
+stomp.py
+httpx
+python-dotenv
+lxml
+psycopg2-binary
+requests

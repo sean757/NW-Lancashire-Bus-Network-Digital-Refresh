@@ -1,4 +1,5 @@
 import logging
+import os
 import requests
 import psycopg2
 from psycopg2.extras import execute_values
@@ -17,11 +18,11 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 log = logging.getLogger(__name__)
 
 DB_CONFIG = {
-    "host": "localhost",
-    "port": "5432",
-    "user": "transport",
-    "password": "transport_dev",
-    "dbname": "transport_db"
+    "host": os.environ.get("DB_HOST", "localhost"),
+    "port": os.environ.get("DB_PORT", "5432"),
+    "user": os.environ.get("DB_USER", "transport"),
+    "password": os.environ.get("DB_PASSWORD", "transport_dev"),
+    "dbname": os.environ.get("DB_NAME", "transport_db")
 }
 
 # All operators from the project
