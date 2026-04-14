@@ -248,10 +248,6 @@ def fetch_stops(conn) -> Tuple[List[Dict], Set[str]]:
             continue
         clean_lat, clean_lon = sanitize_lat_lon(raw_lat, raw_lon)
         if clean_lat is None:
-            log.warning(
-                "Stop %s skipped — coordinates (%.5f, %.5f) outside NW Lancashire bounds.",
-                sid, raw_lat or 0, raw_lon or 0,
-            )
             skipped += 1
             continue
         result.append({

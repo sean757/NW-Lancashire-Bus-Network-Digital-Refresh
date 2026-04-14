@@ -3,13 +3,13 @@ import requests
 from lxml import etree
 import psycopg2
 
-# 1. Database configuration (using the IP you successfully tested earlier)
+# 1. Database configuration
 DB_CONFIG = {
-    "host": "localhost",
-    "port": 5432,
-    "user": "transport",
-    "password": "transport_dev",
-    "dbname": "transport_db"
+    "host": os.environ.get("DB_HOST", "localhost"),
+    "port": int(os.environ.get("DB_PORT", 5432)),
+    "user": os.environ.get("DB_USER", "transport"),
+    "password": os.environ.get("DB_PASSWORD", "transport_dev"),
+    "dbname": os.environ.get("DB_NAME", "transport_db")
 }
 
 """Ingest NaPTAN stops into Postgres.

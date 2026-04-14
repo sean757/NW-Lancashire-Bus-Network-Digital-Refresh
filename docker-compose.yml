@@ -1,0 +1,38 @@
+services:
+  db:
+    image: postgres:16
+    container_name: scc200-db
+    environment:
+      POSTGRES_USER: transport
+      POSTGRES_PASSWORD: transport_dev
+      POSTGRES_DB: transport_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U transport -d transport_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build: .
+    container_name: scc200-app
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_USER: transport
+      DB_PASSWORD: transport_dev
+      DB_NAME: transport_db
+      OTP_URL: http://localhost:9090
+      SKIP_INGEST: "${SKIP_INGEST:-false}"
+    ports:
+      - "8080:8080"
+      - "9090:9090"
+
+volumes:
+  pgdata:

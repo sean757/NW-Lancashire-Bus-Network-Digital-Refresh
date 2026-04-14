@@ -1,3 +1,4 @@
+import os
 import requests
 import psycopg2
 import time
@@ -8,13 +9,13 @@ import urllib3
 # Silence SSL warnings
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# 1. Database Configuration [cite: 132]
+# 1. Database Configuration
 DB_CONFIG = {
-    "host": "localhost",
-    "port": 5432,
-    "user": "transport",
-    "password": "transport_dev",
-    "dbname": "transport_db"
+    "host": os.environ.get("DB_HOST", "localhost"),
+    "port": int(os.environ.get("DB_PORT", 5432)),
+    "user": os.environ.get("DB_USER", "transport"),
+    "password": os.environ.get("DB_PASSWORD", "transport_dev"),
+    "dbname": os.environ.get("DB_NAME", "transport_db")
 }
 
 # 2. Operators from your documentation

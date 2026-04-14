@@ -452,3 +452,112 @@ podman stop scc200-db && podman rm scc200-db
 | User     | transport |
 | Password | transport_dev |
 | Database | transport_db |
+
+---
+
+## Running Without VS Code (CLI Only)
+
+If you do not have VS Code or prefer to run everything from a plain terminal,
+there are three options below.  **Option A is recommended** — it only requires
+Docker and handles everything else automatically (Python, Java, PostgreSQL are
+all bundled inside the containers).
+
+### Option A — Single command with `run.sh` (recommended)
+
+**Only prerequisite:** Docker (with Compose v2) or Podman with `podman-compose`.
+
+No local Python, Java, or PostgreSQL installation is needed — everything runs
+inside containers.
+
+```bash
+# Clone the repo
+git clone https://github.com/sean757/NW-Lancashire-Bus-Network-Digital-Refresh.git
+cd NW-Lancashire-Bus-Network-Digital-Refresh
+
+# Start everything
+./run.sh
+```
+
+This will:
+1. Start a PostgreSQL 16 container
+2. Build an application container with Python 3.12, Java 21, and all dependencies
+3. Initialise the database schema
+4. Start OpenTripPlanner using the pre-built graph
+5. Start the FastAPI server on port 8080
+
+Once you see `"Starting FastAPI server on port 8080"`, open http://localhost:8080 in your browser.
+
+**Other commands:**
+```bash
+./run.sh --quick    # Start without data ingestion (uses backup data, no VPN needed)
+./run.sh --stop     # Stop all containers
+./run.sh --clean    # Stop and remove all containers + data volumes
+```
+
+Or equivalently, without the wrapper:
+```bash
+docker compose up --build                     # start (with ingestion)
+SKIP_INGEST=true docker compose up --build    # start without ingestion
+docker compose down                           # stop
+```
+
+### Option B — Shell scripts (requires local Python, Java, psql)
+
+Use this if you already have Python 3.10+, Java 21+, `postgresql-client`, and
+Docker/Podman installed locally.  If any tool is missing, the scripts will
+detect it and suggest using `./run.sh` (Option A) instead.
+
+```bash
+# One-time setup: creates venv, starts DB, loads data, builds OTP graph
+./setup.sh
+
+# Start the application (PostgreSQL + OTP + FastAPI)
+./start.sh
+```
+
+### Option C — Fully manual (step by step)
+
+Same local prerequisites as Option B.  Each command run individually:
+
+```bash
+# 1. Start PostgreSQL container
+docker run -d --name scc200-db \
+  -e POSTGRES_USER=transport \
+  -e POSTGRES_PASSWORD=transport_dev \
+  -e POSTGRES_DB=transport_db \
+  -p 5432:5432 postgres:16
+
+# 2. Create a Python virtual environment and install dependencies
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+
+# 3. Initialise the database schema
+PGPASSWORD=transport_dev psql -h localhost -U transport -d transport_db -f scripts/init_db.sql
+
+# 4. Ingest data (requires University VPN — skip if unavailable)
+python3 -u scripts/ingest_stops.py
+python3 -u scripts/ingest_timetables.py
+python3 -u scripts/ingest_rail.py
+python3 -u scripts/export_gtfs.py gtfs_export.zip
+mv gtfs_export.zip otp-data/
+
+# 5. Start OTP (in a separate terminal)
+java -Xmx4G -jar otp-shaded-2.8.1.jar --load otp-data --port 9090
+
+# 6. Start the API server (in another terminal — activate venv first)
+source .venv/bin/activate
+export OTP_URL=http://localhost:9090
+uvicorn app.main:app --host 0.0.0.0 --port 8080
+
+# 7. Open http://localhost:8080 in your browser
+```
+
+### Verifying the application
+
+Regardless of which option you chose, verify with:
+
+```bash
+curl http://localhost:8080/health
+curl http://localhost:8080/api/v1/stops/search?q=lancaster
+```
