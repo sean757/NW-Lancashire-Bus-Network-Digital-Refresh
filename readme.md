@@ -10,12 +10,12 @@
 
 ### 0.5. If you are running this on a personal device:
 	
-  a. Consider how performant the device is, running this server can take a while to startup to using slow computers could make the startup procedure take well over 30 minutes
-	b. Ensure that docker is installed, to install docker desktop for windows please see: 
-		i. For windows please see: https://docs.docker.com/desktop/setup/install/windows-install/
-		ii. For Macs please see: https://docs.docker.com/desktop/setup/install/mac-install/
-		iii. For Linux please see: https://docs.docker.com/desktop/setup/install/linux/
-  c. Ensure you are on the University VPN details on how to do this can be found here: https://portal.lancaster.ac.uk/ask/digital/services/university-it-network/vpn/
+1. Consider how performant the device is, running this server can take a while to startup to using slow computers could make the startup procedure take well over 30 minutes
+2. Ensure that docker is installed, to install docker desktop for windows please see: 
+	i. For windows please see: https://docs.docker.com/desktop/setup/install/windows-install/
+	ii. For Macs please see: https://docs.docker.com/desktop/setup/install/mac-install/
+	iii. For Linux please see: https://docs.docker.com/desktop/setup/install/linux/
+3. Ensure you are on the University VPN details on how to do this can be found here: https://portal.lancaster.ac.uk/ask/digital/services/university-it-network/vpn/
 
 ### 1. Clone the repository
 
@@ -141,9 +141,8 @@ wget https://github.com/opentripplanner/OpenTripPlanner/releases/download/v2.8.1
 # (e.g. from https://download.geofabrik.de/europe/great-britain/england/lancashire.html)
 wget https://download.geofabrik.de/europe/united-kingdom/england/lancashire-latest.osm.pbf
 ```
-# Move relevant files into otp-data
-Move gtfs_export.zip into otp-data
-Move lancashire-latest.osm.pbf into otp-data
+#### Move relevant files into otp-data
+Move gtfs_export.zip into otp-data and move lancashire-latest.osm.pbf into otp-data
 
 ```bash
 # Build the OTP graph (takes a few minutes)
@@ -168,7 +167,7 @@ You can still run the application with some of these missing as was described in
 java -Xmx4G -jar otp-shaded-2.8.1.jar --load otp-data --port 9090
 ```
 
-Now open a new terminal in VS code and set the OTP URL before starting the API server:
+**** IMPORTANT Now open a new terminal in VS code and set the OTP URL before starting the API server: IMPORTANT ****
 
 ```bash
 export OTP_URL=http://localhost:9090
