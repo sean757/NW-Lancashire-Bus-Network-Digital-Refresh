@@ -60,6 +60,13 @@ fi
 OTP_JAR="/workspace/otp-shaded-2.8.1.jar"
 OTP_DATA="/workspace/otp-data"
 
+OSM_FILE="$OTP_DATA/lancashire-latest.osm.pbf"
+if [[ ! -f "$OSM_FILE" ]]; then
+    info "Downloading Lancashire OSM extract …"
+    wget -q -O "$OSM_FILE" \
+        "https://download.geofabrik.de/europe/united-kingdom/england/lancashire-latest.osm.pbf"
+fi
+
 if [[ -f "$OTP_JAR" ]]; then
     # Rebuild graph when GTFS data is newer than the existing graph (or no graph exists)
     if [[ ! -f "$OTP_DATA/graph.obj" ]] || \

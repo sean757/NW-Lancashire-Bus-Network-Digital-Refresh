@@ -157,6 +157,13 @@ if [[ ! -f "$OTP_JAR" ]]; then
         "https://github.com/opentripplanner/OpenTripPlanner/releases/download/v2.8.1/otp-shaded-2.8.1.jar"
 fi
 
+OSM_FILE="$OTP_DATA/lancashire-latest.osm.pbf"
+if [[ ! -f "$OSM_FILE" ]]; then
+    info "Downloading Lancashire OSM extract …"
+    wget -q --show-progress -O "$OSM_FILE" \
+        "https://download.geofabrik.de/europe/united-kingdom/england/lancashire-latest.osm.pbf"
+fi
+
 if [[ -f "$OTP_DATA/gtfs_export.zip" && -f "$OTP_DATA/lancashire-latest.osm.pbf" ]]; then
     info "Building OTP graph (this may take a few minutes) …"
     if java -Xmx4G -jar "$OTP_JAR" --build --save "$OTP_DATA"; then
