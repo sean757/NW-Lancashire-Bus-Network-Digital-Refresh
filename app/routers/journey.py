@@ -5,19 +5,21 @@ OTP must be running and loaded with GTFS data exported by scripts/export_gtfs.py
 Configure the OTP URL with the OTP_URL environment variable (default: http://localhost:8080).
 """
 
-from app.services.delay_estimator import estimate_leg_delay, estimate_rail_leg_delay
-from app.services.route_cache import route_cache
-from app.services import otp_client
-from app.database import get_db
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import text
-from pydantic import BaseModel
-from fastapi import APIRouter, Depends, HTTPException
-import httpx
 import logging
 from datetime import date, datetime
 from typing import Optional
 from zoneinfo import ZoneInfo
+
+import httpx
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.database import get_db
+from app.services import otp_client
+from app.services.route_cache import route_cache
+from app.services.delay_estimator import estimate_leg_delay, estimate_rail_leg_delay
 
 _UK_TZ = ZoneInfo("Europe/London")
 
