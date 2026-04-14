@@ -109,9 +109,15 @@ def _ms_to_time_str(epoch_ms: Optional[int]) -> str:
     """Convert epoch-milliseconds to a local-time HH:MM:SS string."""
     if not epoch_ms:
         return ""
-    from datetime import datetime
-    dt = datetime.fromtimestamp(epoch_ms / 1000.0)
-    return dt.strftime("%H:%M:%S")
+    from datetime import datetime, timezone
+    from zoneinfo import ZoneInfo
+
+    # OTP timestamps are absolute epoch milliseconds (UTC-based).
+    # Convert explicitly to the project's service timezone so displayed times
+    # match user-entered local times (including BST/GMT transitions).
+    dt_utc = datetime.fromtimestamp(epoch_ms / 1000.0, tz=timezone.utc)
+    dt_local = dt_utc.astimezone(ZoneInfo("Europe/London"))
+    return dt_local.strftime("%H:%M:%S")
 
 
 def _walk_speed_mps(preference: str) -> float:

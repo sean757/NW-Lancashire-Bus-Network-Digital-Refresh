@@ -260,6 +260,10 @@ body {
     align-items: flex-end;
 }
 
+.planner-row-controls {
+    gap: 10px;
+}
+
 .planner-row:last-child {
     margin-bottom: 0;
     padding-top: 16px;
@@ -287,6 +291,36 @@ body {
     border-radius: 4px;
     font-size: 14px;
     transition: border-color 0.3s;
+}
+
+/* Compact split date/time controls (clean, Waze-like) */
+.datetime-compact {
+    flex: 0 0 150px;
+    min-width: 130px;
+}
+
+.datetime-compact select {
+    border: 2px solid var(--border-color);
+    border-radius: 4px;
+    background-color: var(--white);
+    color: var(--text-color);
+    font-weight: 400;
+    padding: 10px 12px;
+    appearance: auto;
+    -webkit-appearance: menulist;
+    -moz-appearance: menulist;
+}
+
+.datetime-compact select:focus {
+    border-color: var(--primary-color);
+    box-shadow: none;
+}
+
+@media (max-width: 768px) {
+    .datetime-compact {
+        flex: 1 1 calc(50% - 8px);
+        min-width: 140px;
+    }
 }
 
 /* Reserve space for inline loading indicator inside inputs */

@@ -252,6 +252,23 @@ def _parse_departure_time_date(req: JourneyRequest):
     return dep_time, dep_date
 
 
+def _time_str_to_minutes(value: Optional[str]) -> Optional[int]:
+    """Convert HH:MM or HH:MM:SS to minutes since midnight."""
+    if not value:
+        return None
+    parts = value.strip().split(":")
+    if len(parts) < 2:
+        return None
+    try:
+        hh = int(parts[0])
+        mm = int(parts[1])
+    except ValueError:
+        return None
+    if hh < 0 or hh > 47 or mm < 0 or mm > 59:
+        return None
+    return hh * 60 + mm
+
+
 # ---------------------------------------------------------------------------
 # Endpoint
 # ---------------------------------------------------------------------------
@@ -318,6 +335,27 @@ async def plan_journey(req: JourneyRequest, db: AsyncSession = Depends(get_db)):
             status_code=502,
             detail=f"Journey planning service returned an error: HTTP {exc.response.status_code}.",
         )
+
+    # Enforce depart-after semantics. In rare cases OTP may include an
+    # itinerary that starts slightly earlier than requested.
+    if not (req.arrive_by or False):
+        requested_mins = dep_time.hour * 60 + dep_time.minute
+        filtered_journeys = []
+        for journey in journeys:
+            legs = journey.get("legs") or []
+            if not legs:
+                continue
+            first_dep = (legs[0] or {}).get("departure_time")
+            first_dep_mins = _time_str_to_minutes(first_dep)
+            if first_dep_mins is None:
+                filtered_journeys.append(journey)
+                continue
+
+            # Keep normal same-day departures and plausible overnight wraps.
+            if first_dep_mins >= requested_mins or (requested_mins - first_dep_mins) >= 12 * 60:
+                filtered_journeys.append(journey)
+
+        journeys = filtered_journeys
 
     # Enrich legs:
     # - Bus legs get DB-backed waypoints for map drawing.
