@@ -517,6 +517,11 @@ async def plan_journey(req: JourneyRequest, db: AsyncSession = Depends(get_db)):
                 leg["delay_source"] = "schedule"
                 leg["realtime_status"] = "schedule"
 
+    if req.preference == "least-changes":
+        journeys.sort(key=lambda j: len(j.get("legs", [])))  # Sort by number of legs (least changes first)
+    else:
+        journeys.sort(key=lambda j: j.get("duration", float("inf")))  # Sort by duration (fastest first)
+        
     return {
         "origin": {"stop_id": origin_stop_id, "name": origin_name},
         "destination": {"stop_id": dest_stop_id, "name": dest_name},
