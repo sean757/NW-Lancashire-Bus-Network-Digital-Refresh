@@ -332,7 +332,7 @@ body {
 .input-loading {
     display: none;
     position: absolute;
-    right: 10px;
+    right: 48px;
     width: 16px;
     height: 16px;
     border-radius: 50%;
@@ -1225,7 +1225,8 @@ body.high-contrast .input-group input.map-input-picking {
 }
 
 .suggestion-item:hover,
-.suggestion-item:focus {
+.suggestion-item:focus,
+.suggestion-item.suggestion-active {
     background-color: rgba(46, 80, 144, 0.06);
     outline: none;
 }
@@ -1692,6 +1693,7 @@ body.high-contrast .journey-departed-warning {
     display: flex;
     align-items: stretch;
     gap: 0;
+    position: relative;
 }
 
 .location-input-wrapper input {

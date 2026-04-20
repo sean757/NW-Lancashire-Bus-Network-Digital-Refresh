@@ -377,6 +377,14 @@ function renderFromSuggestions(items) {
             if (e.key === 'Enter' || e.key === ' ') {
                 e.preventDefault();
                 li.click();
+            } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                e.preventDefault();
+                let active = parseInt(fromSuggestions.dataset.active || '-1', 10);
+                if (e.key === 'ArrowDown') setActiveSuggestion(fromSuggestions, active + 1);
+                else setActiveSuggestion(fromSuggestions, active - 1);
+            } else if (e.key === 'Escape') {
+                clearFromSuggestions();
+                fromInput.focus();
             }
         });
         list.appendChild(li);
@@ -387,6 +395,7 @@ function renderFromSuggestions(items) {
     fromSuggestions.appendChild(list);
     positionFromSuggestions();
     fromSuggestions.style.display = 'block';
+    fromSuggestions.dataset.active = '-1';
 }
 
 function clearToSuggestions() {
@@ -422,6 +431,14 @@ function renderToSuggestions(items) {
             if (e.key === 'Enter' || e.key === ' ') {
                 e.preventDefault();
                 li.click();
+            } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                e.preventDefault();
+                let active = parseInt(toSuggestions.dataset.active || '-1', 10);
+                if (e.key === 'ArrowDown') setActiveSuggestion(toSuggestions, active + 1);
+                else setActiveSuggestion(toSuggestions, active - 1);
+            } else if (e.key === 'Escape') {
+                clearToSuggestions();
+                toInput.focus();
             }
         });
         list.appendChild(li);
@@ -449,6 +466,7 @@ function setActiveSuggestion(container, idx) {
     if (chosen) {
         chosen.classList.add('suggestion-active');
         chosen.setAttribute('aria-selected', 'true');
+        chosen.scrollIntoView({ block: 'nearest' });
         chosen.focus();
         container.dataset.active = String(idx);
     }
