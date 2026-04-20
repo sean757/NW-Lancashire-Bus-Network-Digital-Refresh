@@ -518,9 +518,22 @@ async def plan_journey(req: JourneyRequest, db: AsyncSession = Depends(get_db)):
                 leg["realtime_status"] = "schedule"
 
     if req.preference == "least-changes":
-        journeys.sort(key=lambda j: len(j.get("legs", [])))  # Sort by number of legs (least changes first)
+        # Sort by OTP numberOfTransfers if available, otherwise count transit legs
+        def _transfer_count(j):
+            if "numberOfTransfers" in j:
+                return j["numberOfTransfers"]
+            return sum(1 for l in j.get("legs", []) if (l.get("mode") or "").lower() != "walk") - 1
+        journeys.sort(key=lambda j: (_transfer_count(j), j.get("duration", float("inf"))))
     else:
-        journeys.sort(key=lambda j: j.get("duration", float("inf")))  # Sort by duration (fastest first)
+        # Sort by earliest arrival time (last leg's arrival_time "HH:MM:SS")
+        def _arrival_sort_key(j):
+            legs = j.get("legs") or []
+            if legs:
+                arr = legs[-1].get("arrival_time", "")
+                if arr:
+                    return arr
+            return "99:99:99"
+        journeys.sort(key=_arrival_sort_key)
         
     return {
         "origin": {"stop_id": origin_stop_id, "name": origin_name},

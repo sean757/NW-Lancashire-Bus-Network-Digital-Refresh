@@ -124,10 +124,10 @@ def _walk_speed_mps(preference: str) -> float:
 def _transfer_penalty(preference: str) -> int:
     """
     Return an OTP transfer-penalty (seconds) that encourages fewest changes.
-    'least-changes' adds a 5-minute cost per transfer to steer OTP toward
-    itineraries with fewer board/alight events.
+    'least-changes' adds a 30-minute cost per transfer to strongly steer OTP
+    toward itineraries with fewer board/alight events.
     """
-    return 300 if preference == "least-changes" else 0
+    return 1800 if preference == "least-changes" else 0
 
 
 def _decode_polyline(encoded: str) -> List[List[float]]:
@@ -318,7 +318,13 @@ def _itineraries_to_journeys(itineraries: List[Dict[str, Any]]) -> List[Dict[str
             else "transfer" if transit_count == 2
             else "multi-transfer"
         )
-        journeys.append({"type": journey_type, "legs": legs})
+        journey: Dict[str, Any] = {"type": journey_type, "legs": legs}
+        # Propagate OTP duration (seconds) and transfer count for sorting
+        if itinerary.get("duration") is not None:
+            journey["duration"] = itinerary["duration"]
+        if itinerary.get("numberOfTransfers") is not None:
+            journey["numberOfTransfers"] = itinerary["numberOfTransfers"]
+        journeys.append(journey)
 
     return journeys
 
@@ -411,7 +417,7 @@ async def plan_journey(
         "walkSpeed": _walk_speed_mps(walking_speed),
         "transferPenalty": _transfer_penalty(preference),
         "arriveBy": arrive_by,
-        "searchWindow": 3600,  # 1-hour window so OTP finds more alternatives
+        "searchWindow": 7200,  # 2-hour window so OTP returns ~1 hour of journey options
     }
 
     async with httpx.AsyncClient(timeout=30.0) as client:
