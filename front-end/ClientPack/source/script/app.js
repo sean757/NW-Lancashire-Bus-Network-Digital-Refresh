@@ -1517,6 +1517,9 @@ const translations = {
         mapClickNotifyReset: 'Start point updated.',
         mapClickNotifyStop: 'Via stop set.',
         stopDwellLabel: 'Stop time (min):',
+        addStop: '+ Add Stop',
+        viaStop: 'Via Stop',
+        viaStopPlaceholder: 'Enter intermediate stop',
         viewDepartures: 'View Departures',
         departuresTitle: 'Departures (next 24 hours)',
         departuresLoading: 'Loading departures…',
@@ -1588,6 +1591,9 @@ const translations = {
         mapClickNotifyReset: '起点已更新。',
         mapClickNotifyStop: '途经站点已设置。',
         stopDwellLabel: '停留时间（分钟）：',
+        addStop: '+ 添加途经点',
+        viaStop: '途经点',
+        viaStopPlaceholder: '输入途经站点',
         viewDepartures: '查看发车',
         departuresTitle: '发车信息（未来24小时）',
         departuresLoading: '正在加载发车信息…',
@@ -1630,6 +1636,8 @@ function applyTranslations(lang) {
     document.querySelector('#walkingSpeed option[value="medium"]').textContent = t.medium;
     document.querySelector('#walkingSpeed option[value="fast"]').textContent = t.fast;
     document.getElementById('planRouteBtn').textContent = t.planRoute;
+    const addStopBtn = document.getElementById('addStopBtn');
+    if (addStopBtn) addStopBtn.textContent = t.addStop || '+ Add Stop';
 
     // Route Display
     document.querySelector('.route-display h3').textContent = t.routeInfo;
@@ -2145,15 +2153,17 @@ function addStopRow() {
     const group = document.createElement('div');
     group.className = 'input-group';
 
+    const tNow = translations[currentLang] || translations.en;
+
     const label = document.createElement('label');
-    label.textContent = `Via Stop ${idx + 1}:`;
+    label.textContent = `${tNow.viaStop || 'Via Stop'} ${idx + 1}:`;
     label.htmlFor = `stopPoint${idx}`;
 
     const input = document.createElement('input');
     input.type = 'text';
     input.id = `stopPoint${idx}`;
     input.className = 'stop-point-input';
-    input.placeholder = 'Enter intermediate stop';
+    input.placeholder = tNow.viaStopPlaceholder || 'Enter intermediate stop';
     input.dataset.idx = String(idx);
 
     group.appendChild(label);
@@ -2164,7 +2174,6 @@ function addStopRow() {
     dwellGroup.className = 'input-group stop-dwell-group';
 
     const dwellLabel = document.createElement('label');
-    const tNow = translations[currentLang] || translations.en;
     dwellLabel.textContent = tNow.stopDwellLabel || 'Stop time (min):';
     dwellLabel.htmlFor = `stopDwell${idx}`;
 
