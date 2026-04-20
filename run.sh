@@ -32,9 +32,10 @@ if command -v podman-compose &>/dev/null; then
     # docker-shim on machines that have Podman but not Docker.
     COMPOSE_CMD="podman-compose"
 elif command -v docker &>/dev/null && docker compose version &>/dev/null 2>&1; then
-    # Only use "docker compose" when it is genuine Docker, not the Podman shim
-    # wrapping the old Python docker-compose that needs the Docker socket.
-    if ! docker info 2>&1 | grep -qi podman; then
+    # Only use "docker compose" when it is genuine Docker with a running daemon,
+    # not the Podman shim wrapping the old Python docker-compose that needs the
+    # Docker socket.  docker info failing means the daemon is not running — skip.
+    if docker info &>/dev/null 2>&1 && ! docker info 2>&1 | grep -qi podman; then
         COMPOSE_CMD="docker compose"
     fi
 fi

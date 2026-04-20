@@ -23,6 +23,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY . .
 
+# Strip Windows CRLF line endings from shell scripts in case they were
+# checked out on Windows before .gitattributes was in place.
+RUN sed -i 's/\r//' docker-start.sh
+
 EXPOSE 8080
 
 # Default: run the start-inside-docker helper
