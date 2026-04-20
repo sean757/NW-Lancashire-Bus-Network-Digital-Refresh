@@ -27,13 +27,19 @@ cd "$SCRIPT_DIR"
 # ─── Detect container runtime ───────────────────────────────────────────────
 
 COMPOSE_CMD=""
-if command -v docker &>/dev/null && docker compose version &>/dev/null 2>&1; then
-    COMPOSE_CMD="docker compose"
-elif command -v podman-compose &>/dev/null; then
+if command -v podman-compose &>/dev/null; then
+    # Prefer podman-compose when available — avoids issues with the
+    # docker-shim on machines that have Podman but not Docker.
     COMPOSE_CMD="podman-compose"
-elif command -v podman &>/dev/null && podman compose version &>/dev/null 2>&1; then
-    COMPOSE_CMD="podman compose"
-else
+elif command -v docker &>/dev/null && docker compose version &>/dev/null 2>&1; then
+    # Only use "docker compose" when it is genuine Docker, not the Podman shim
+    # wrapping the old Python docker-compose that needs the Docker socket.
+    if ! docker info 2>&1 | grep -qi podman; then
+        COMPOSE_CMD="docker compose"
+    fi
+fi
+
+if [[ -z "$COMPOSE_CMD" ]]; then
     error "Docker (with Compose v2) or podman-compose is required."
     error "Install Docker Desktop: https://docs.docker.com/desktop/"
     exit 1

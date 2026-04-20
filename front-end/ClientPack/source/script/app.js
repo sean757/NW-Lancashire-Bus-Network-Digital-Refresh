@@ -1,5 +1,5 @@
 // Leaflet map and markers
-const apiUrl = 'https://naoma-veinal-adelina.ngrok-free.dev/api/v1';
+const apiUrl = 'http://localhost:8080/api/v1';
 
 /*
   Helper functions

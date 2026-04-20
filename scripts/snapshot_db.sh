@@ -22,9 +22,25 @@ mkdir -p "$SNAPSHOT_DIR"
 
 echo "[INFO] Dumping database '$DB_NAME' from $DB_HOST:$DB_PORT …"
 
-pg_dump -h "$DB_HOST" -U "$DB_USER" -d "$DB_NAME" \
-    --no-owner --no-privileges --clean --if-exists \
-    | gzip > "$SNAPSHOT_FILE"
+# Try local pg_dump first; fall back to running it inside the container
+if command -v pg_dump &>/dev/null; then
+    pg_dump -h "$DB_HOST" -U "$DB_USER" -d "$DB_NAME" \
+        --no-owner --no-privileges --clean --if-exists \
+        | gzip > "$SNAPSHOT_FILE"
+elif command -v podman &>/dev/null; then
+    podman exec -e PGPASSWORD="$PGPASSWORD" scc200-db \
+        pg_dump -h localhost -U "$DB_USER" -d "$DB_NAME" \
+        --no-owner --no-privileges --clean --if-exists \
+        | gzip > "$SNAPSHOT_FILE"
+elif command -v docker &>/dev/null; then
+    docker exec -e PGPASSWORD="$PGPASSWORD" scc200-db \
+        pg_dump -h localhost -U "$DB_USER" -d "$DB_NAME" \
+        --no-owner --no-privileges --clean --if-exists \
+        | gzip > "$SNAPSHOT_FILE"
+else
+    echo "[ERROR] Neither pg_dump, podman, nor docker found."
+    exit 1
+fi
 
 SIZE=$(du -h "$SNAPSHOT_FILE" | cut -f1)
 echo "[INFO] Snapshot saved to db-snapshot/transport_db.sql.gz ($SIZE)"

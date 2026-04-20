@@ -23,6 +23,18 @@ if [[ ! -f "$SNAPSHOT_FILE" ]]; then
 fi
 
 echo "[INFO] Restoring database '$DB_NAME' from snapshot …"
-gunzip -c "$SNAPSHOT_FILE" | psql -h "$DB_HOST" -U "$DB_USER" -d "$DB_NAME" --quiet --single-transaction
+
+if command -v psql &>/dev/null; then
+    gunzip -c "$SNAPSHOT_FILE" | psql -h "$DB_HOST" -U "$DB_USER" -d "$DB_NAME" --quiet --single-transaction
+elif command -v podman &>/dev/null; then
+    gunzip -c "$SNAPSHOT_FILE" | podman exec -i -e PGPASSWORD="$PGPASSWORD" scc200-db \
+        psql -h localhost -U "$DB_USER" -d "$DB_NAME" --quiet --single-transaction
+elif command -v docker &>/dev/null; then
+    gunzip -c "$SNAPSHOT_FILE" | docker exec -i -e PGPASSWORD="$PGPASSWORD" scc200-db \
+        psql -h localhost -U "$DB_USER" -d "$DB_NAME" --quiet --single-transaction
+else
+    echo "[ERROR] Neither psql, podman, nor docker found."
+    exit 1
+fi
 
 echo "[INFO] Database restored successfully from snapshot."
