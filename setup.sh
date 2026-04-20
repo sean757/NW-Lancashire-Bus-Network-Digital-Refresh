@@ -133,6 +133,13 @@ run_ingest "Ingesting stop data"       python3 -u scripts/ingest_stops.py
 run_ingest "Ingesting timetable data"  python3 -u scripts/ingest_timetables.py
 run_ingest "Ingesting rail data"       python3 -u scripts/ingest_rail.py
 
+# Check whether the database has any data; if not, try restoring from snapshot
+ROW_COUNT=$(PGPASSWORD="$DB_PASS" psql -h localhost -U "$DB_USER" -d "$DB_NAME" -tAc "SELECT count(*) FROM stops" 2>/dev/null || echo "0")
+if [[ "$ROW_COUNT" -eq 0 ]] && [[ -f "$SCRIPT_DIR/db-snapshot/transport_db.sql.gz" ]]; then
+    warn "Ingestion produced no data — restoring from snapshot …"
+    bash scripts/restore_db.sh localhost
+fi
+
 # ─── GTFS export ─────────────────────────────────────────────────────────────
 
 info "Exporting GTFS data …"

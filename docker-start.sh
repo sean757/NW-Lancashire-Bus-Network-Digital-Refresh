@@ -53,6 +53,16 @@ if [[ "$SKIP_INGEST" != "true" ]]; then
         mv -f gtfs_export.zip otp-data/gtfs_export.zip || warn "GTFS export failed."
 else
     info "Skipping data ingestion (using pre-built data).  Set SKIP_INGEST=false to ingest."
+    # Restore from committed database snapshot if available
+    if [[ -f /workspace/db-snapshot/transport_db.sql.gz ]]; then
+        info "Restoring database from snapshot …"
+        gunzip -c /workspace/db-snapshot/transport_db.sql.gz \
+            | PGPASSWORD="$DB_PASS" psql -h "$DB_HOST" -U "$DB_USER" -d "$DB_NAME" --quiet --single-transaction \
+            && info "Database restored from snapshot." \
+            || warn "Snapshot restore failed — database may be empty."
+    else
+        warn "No database snapshot found at db-snapshot/transport_db.sql.gz"
+    fi
 fi
 
 # ─── Build OTP graph if needed ───────────────────────────────────────────────
