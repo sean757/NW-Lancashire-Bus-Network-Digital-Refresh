@@ -25,7 +25,7 @@ After receiving a report, we follow these steps to manage the vulnerability:
 1. **Acknowledgment:** We will acknowledge receipt of your report within **48 hours**.
 2. **Evaluation:** Our team will assess the severity (Low/Medium/High/Critical).
 3. **Fixing:** For Critical/High issues, we aim to provide a fix within **72 hours** of confirmation.
-4. **Notification:** Once fixed, we will notify the reporter. If the issue affected customer data, we will inform affected customers via site banners or email (as per Claim 3.4.2).
+4. **Notification:** Once fixed, we will notify the reporter. If the issue affected customer data, we will inform affected customers via site banners or email.
 
 ## 4. Safe Harbor
 We will not take legal action against you if you follow this policy, act in good faith, and do not disrupt our services or compromise user data.
