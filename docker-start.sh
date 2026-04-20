@@ -70,6 +70,12 @@ fi
 OTP_JAR="/workspace/otp-shaded-2.8.1.jar"
 OTP_DATA="/workspace/otp-data"
 
+if [[ ! -f "$OTP_JAR" ]]; then
+    info "Downloading OpenTripPlanner JAR …"
+    wget -q --show-progress -O "$OTP_JAR" \
+        "https://github.com/opentripplanner/OpenTripPlanner/releases/download/v2.8.1/otp-shaded-2.8.1.jar"
+fi
+
 OSM_FILE="$OTP_DATA/lancashire-latest.osm.pbf"
 if [[ ! -f "$OSM_FILE" ]]; then
     info "Downloading Lancashire OSM extract …"
