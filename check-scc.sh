@@ -126,6 +126,10 @@ check_endpoint() {
         elif [[ "$body_trimmed" == "{}" || "$body_trimmed" == "[]" || "$body_trimmed" == "null" ]]; then
             verdict="DOWN"
             reason="empty JSON ($body_trimmed)"
+        elif echo "$body_trimmed" | grep -qE '"count":0[,}]' \
+             && echo "$body_trimmed" | grep -qE '"results":\[\]'; then
+            verdict="DOWN"
+            reason="empty paginated JSON (count=0, results=[])"
         elif [[ "$body_trimmed" =~ ^(\<\?xml[^?]*\?\>)?\<[A-Za-z_][A-Za-z0-9_:-]*/\>$ ]]; then
             verdict="DOWN"
             reason="empty XML document"
