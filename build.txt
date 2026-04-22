@@ -1,0 +1,23 @@
+Build Instructions:
+
+You should attempt to use Route 1 first. If the transport.scc.lancs.ac.uk API is down or degraded it may be worth using backup data via Route 2
+
+To establish which route to use first run "check-scc.sh" by doing ./check-scc.sh, if both bus timetables (not live bus data) and rail timetables are up you should be good to run via Route 1, otherwise run via Route 2
+
+
+Route 1: Using fresh data
+
+Run "./run.sh"
+
+This will start both devcontainers and import new bus/rail data. Please wait until the command line shows the app is running on localhost:8080/0.0.0.0:8080
+
+Once the command line has notified you please wait 60 seconds for the route cache to load, after 60s you may go to localhost:8080 and use the application
+
+
+Route 2: Use stored data
+
+In the event the trasport.scc API is degraded or down please run "./run.sh --quick"
+
+This will start the app using cached databse images, because this data may be from when the project was submitted you may encounter the following issues:
+ - Bus route geometry being incorrect/not mapping to the road exactly
+ - A lack of routes being returned
