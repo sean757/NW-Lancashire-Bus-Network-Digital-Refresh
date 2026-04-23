@@ -1,8 +1,8 @@
 Build Instructions:
 
-You should attempt to use Route 1 first. If the transport.scc.lancs.ac.uk API is down or degraded it may be worth using backup data via Route 2
+You should attempt to use Route 1 first. If the transport.scc.lancs.ac.uk API is down or degraded it may be worth using backup data via Route 2. See steps on how to establish what route to use below.
 
-To establish which route to use first run "check-scc.sh" by doing ./check-scc.sh, if both bus timetables (not live bus data) and rail timetables are up you should be good to run via Route 1, otherwise run via Route 2
+To establish which route to use first run "check-scc.sh" by doing ./check-scc.sh, if both bus timetables (not live bus data), rail timetables and bus the naptan endpoints are up you should be ok to run via Route 1, otherwise run via Route 2
 
 
 Route 1: Using fresh data
@@ -11,13 +11,27 @@ Run "./run.sh"
 
 This will start both devcontainers and import new bus/rail data. Please wait until the command line shows the app is running on localhost:8080/0.0.0.0:8080
 
-Once the command line has notified you please wait 60 seconds for the route cache to load, after 60s you may go to localhost:8080 and use the application
+Once the command line has notified you please wait up to 2 minutes for the route cache to load, after 2 mins you may go to localhost:8080 and use the application
 
 
-Route 2: Use stored data
+Route 2: Using stored data
 
 In the event the trasport.scc API is degraded or down please run "./run.sh --quick"
 
 This will start the app using cached databse images, because this data may be from when the project was submitted you may encounter the following issues:
  - Bus route geometry being incorrect/not mapping to the road exactly
  - A lack of routes being returned
+ 
+ 
+ Other functions:
+ 
+ Restarting:
+ 
+ If you wish to restart the app follow these steps:
+ 1. Do Ctrl + C in the Terminal running the app
+ 2. Wait for the output to come to an end
+ 3. If the application hasn't fully released the terminal do Ctrl + C again
+ 4. Once you can type in a command again run "./run.sh --clean"
+ 5. Then run "./run.sh" or "./run.sh --quick" to start the app again
+ 
+Please see Manual.pdf for further details on how to use the app.
