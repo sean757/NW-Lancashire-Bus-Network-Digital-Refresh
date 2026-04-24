@@ -7,6 +7,7 @@ If any of the following are not executable, make them executable by running the 
  - "run.sh" --> chmod +x run.sh
  - "setup.sh" --> chmod +x setup.sh
  - "start.sh" --> chmod +x start.sh
+ - "check-scc.sh" -- chmod +x check-scc.sh
 
 Step 2: Check API status to determine the Build Route
 You should attempt to use Route 1 first. If the transport.scc.lancs.ac.uk API is down or degraded it may be worth using backup data via Route 2. See steps on how to establish what route to use below.
