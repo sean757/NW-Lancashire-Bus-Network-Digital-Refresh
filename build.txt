@@ -3,8 +3,10 @@ Build Instructions:
 Step 1: Check shell scripts are executable
 Before continuing, please ensure that the shell scripts in this repository are executable by you.
 You can verify their permissions by running: `ls -la *.sh`
-If they are not executable, make them executable by running the following command:
-`chmod +x *.sh`
+If any of the following are not executable, make them executable by running the following command:
+ - "run.sh" --> chmod +x run.sh
+ - "setup.sh" --> chmod +x setup.sh
+ - "start.sh" --> chmod +x start.sh
 
 Step 2: Check API status to determine the Build Route
 You should attempt to use Route 1 first. If the transport.scc.lancs.ac.uk API is down or degraded it may be worth using backup data via Route 2. See steps on how to establish what route to use below.
