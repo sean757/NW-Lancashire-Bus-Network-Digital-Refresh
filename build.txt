@@ -1,9 +1,17 @@
 Build Instructions:
 
+Step 1: Check shell scripts are executable
+Before continuing, please ensure that the shell scripts in this repository are executable by you.
+You can verify their permissions by running: `ls -la *.sh`
+If they are not executable, make them executable by running the following command:
+`chmod +x *.sh`
+
+Step 2: Check API status to determine the Build Route
 You should attempt to use Route 1 first. If the transport.scc.lancs.ac.uk API is down or degraded it may be worth using backup data via Route 2. See steps on how to establish what route to use below.
 
 To establish which route to use first run "check-scc.sh" by doing ./check-scc.sh, if both bus timetables (not live bus data), rail timetables and bus the naptan endpoints are up you should be ok to run via Route 1, otherwise run via Route 2
 
+Step 3: Proceed with the Application Start (Route 1 or Route 2)
 
 Route 1: Using fresh data
 
